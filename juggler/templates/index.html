@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Juggler</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='%2334d399'/><circle cx='32' cy='32' r='12' fill='%230b1020'/></svg>">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="bg"></div>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo"><span class="orb" id="orb"></span></span>
+    <div>
+      <div class="name">Juggler</div>
+      <div class="sub" id="subtitle">starting…</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="phase" id="phase"></span>
+    <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- HERO -->
+  <section class="card hero">
+    <div class="hero-main">
+      <div class="flag" id="hero-flag">🏳️</div>
+      <div class="hero-text">
+        <div class="eyebrow" id="hero-eyebrow">Connecting</div>
+        <h1 id="hero-title">Looking for working configs…</h1>
+        <div class="chips" id="hero-chips"></div>
+      </div>
+    </div>
+    <div class="hero-side">
+      <div class="ring" title="Next automatic refresh">
+        <svg viewBox="0 0 120 120">
+          <circle class="ring-bg" cx="60" cy="60" r="52"/>
+          <circle class="ring-fg" id="ring" cx="60" cy="60" r="52"/>
+        </svg>
+        <div class="ring-label"><b id="countdown">--:--</b><span>next refresh</span></div>
+      </div>
+      <button class="btn primary" id="refresh">
+        <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+        Refresh now
+      </button>
+    </div>
+  </section>
+
+  <!-- CONTROLS + FUNNEL -->
+  <section class="row">
+    <div class="card control" id="ctl-sysproxy">
+      <div>
+        <div class="ctl-title">System proxy</div>
+        <div class="ctl-desc" id="sysproxy-desc">Route Windows apps through Juggler</div>
+      </div>
+      <button class="switch" id="sysproxy" role="switch" aria-checked="false"><span></span></button>
+    </div>
+    <div class="card control">
+      <div>
+        <div class="ctl-title">Safe mode</div>
+        <div class="ctl-desc">Drop configs that travel unencrypted</div>
+      </div>
+      <button class="switch" id="safemode" role="switch" aria-checked="true"><span></span></button>
+    </div>
+    <div class="card funnel" id="funnel"></div>
+  </section>
+
+  <section class="grid">
+    <!-- CONFIGS -->
+    <div class="card table-card">
+      <div class="card-head">
+        <h2>Working configs <span class="count" id="node-count">0</span></h2>
+        <div class="head-actions">
+          <span class="hint" id="balancer-hint">Auto · lowest ping wins</span>
+          <button class="btn ghost small" id="auto" hidden>Back to auto</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr>
+            <th data-sort="rank">#</th>
+            <th data-sort="country">Location</th>
+            <th data-sort="proto">Protocol</th>
+            <th data-sort="ping_ms" class="num">Ping</th>
+            <th data-sort="speed_kbps" class="num">Speed</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="nodes"></tbody>
+        </table>
+        <div class="empty" id="nodes-empty">No working configs yet. The first test cycle takes about a minute.</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <!-- PHONE -->
+      <div class="card phone">
+        <div class="card-head"><h2>Phone</h2><span class="hint">v2rayNG / Hiddify</span></div>
+        <div class="phone-body">
+          <img id="sub-qr" alt="Subscription QR code">
+          <div class="phone-info">
+            <label>Subscription URL</label>
+            <div class="copy-field" data-copy-id="sub-url"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
+            <label>LAN proxy</label>
+            <div class="copy-field"><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
+            <p class="note">Phone and PC on the same Wi-Fi. In v2rayNG: <b>☰ → Subscription group settings → +</b>, paste the URL, then <b>Update subscription</b>.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- WHITELIST -->
+      <div class="card">
+        <div class="card-head"><h2>Direct whitelist</h2><span class="hint">bypasses the proxy</span></div>
+        <form class="add-row" id="wl-form">
+          <input id="wl-input" placeholder="example.com, 1.2.3.0/24, geosite:…" autocomplete="off" spellcheck="false">
+          <button class="btn small">Add</button>
+        </form>
+        <div class="chips wl" id="wl"></div>
+      </div>
+
+      <!-- SOURCES & TOR -->
+      <div class="card">
+        <div class="card-head"><h2>Sources</h2><span class="hint" id="tor-status">Tor</span></div>
+        <ul class="sources" id="sources"></ul>
+        <details class="editor">
+          <summary>Edit sources</summary>
+          <textarea id="sources-text" spellcheck="false" placeholder="https://t.me/s/ConfigsHUB"></textarea>
+          <button class="btn small" id="sources-save">Save sources</button>
+        </details>
+        <details class="editor">
+          <summary>Tor bridges</summary>
+          <textarea id="bridges-text" spellcheck="false" placeholder="webtunnel [2001:db8::1]:443 … url=https://…"></textarea>
+          <button class="btn small" id="bridges-save">Save &amp; restart Tor</button>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOG -->
+  <section class="card logcard">
+    <div class="card-head">
+      <h2>Live log</h2>
+      <div class="filters" id="filters">
+        <button class="pill on" data-level="all">All</button>
+        <button class="pill" data-level="ok">OK</button>
+        <button class="pill" data-level="warn">Warnings</button>
+        <button class="pill" data-level="error">Errors</button>
+      </div>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-title" id="modal-title"></div>
+    <img id="modal-qr" alt="QR code">
+    <code class="modal-link" id="modal-link"></code>
+    <div class="modal-actions">
+      <button class="btn small" id="modal-copy">Copy link</button>
+      <button class="btn ghost small" id="modal-close">Close</button>
+    </div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
