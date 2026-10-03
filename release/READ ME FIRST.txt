@@ -1,0 +1,38 @@
+JUGGLER - a free VPN that runs on your own computer
+====================================================
+
+INSTALL (Windows, once)
+-----------------------
+1. Right-click the ZIP file and choose "Extract All...".
+   Put the folder somewhere permanent, for example in Documents.
+   (Do not run anything from inside the ZIP window.)
+
+2. Open the extracted "Juggler" folder and double-click  Install.bat
+   - If a blue window says "Windows protected your PC":
+     click "More info", then "Run anyway".
+   - Wait until it says "All set" (a few minutes). Nothing needs the internet.
+
+3. From now on, open  Juggler  from your Desktop or Start menu.
+   A black window (the log) and a web page (the dashboard) open.
+   Keep the black window open while you use the VPN.
+
+USING IT
+--------
+- Turn OFF any other VPN while Juggler runs.
+- The first check takes about a minute. Then the dashboard shows "Connected".
+- Whole computer: switch on "System proxy" in the dashboard.
+- Phone (v2rayNG), same Wi-Fi: scan the QR code on the dashboard's Phone card.
+- If Windows asks whether to allow Juggler on networks, click "Allow".
+
+IF SOMETHING GOES WRONG
+-----------------------
+- Antivirus removed xray.exe or tor.exe: proxy tools are sometimes flagged by
+  mistake. Restore them / allow the Juggler folder, then run Install.bat again.
+- "Python was installed but can't be found": restart Windows, run Install.bat again.
+- The phone can't connect: look at the Phone card on the dashboard; if it says
+  the firewall blocks phones, press "Allow phone access".
+
+LINUX
+-----
+Extract the .tar.gz, then in a terminal inside the folder:  ./install.sh
+Afterwards start "Juggler" from the app menu (or run ./juggler.sh).

@@ -20,7 +20,10 @@ ok "$("$PY" -V)"
 
 step 2 "Python packages"
 [ -x .venv/bin/python ] || "$PY" -m venv .venv
-.venv/bin/python -m pip install -q --disable-pip-version-check -r requirements.txt || fail "pip could not install the packages"
+# release archive: install from the bundled wheels, offline; otherwise from PyPI
+{ [ -d wheels ] && .venv/bin/python -m pip install -q --disable-pip-version-check --no-index --find-links wheels -r requirements.txt; } \
+  || .venv/bin/python -m pip install -q --disable-pip-version-check -r requirements.txt \
+  || fail "pip could not install the packages"
 ok "ready"
 
 step 3 "Xray, Iran geo data and Tor (about 70 MB, only once)"

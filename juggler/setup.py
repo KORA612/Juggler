@@ -53,30 +53,58 @@ def _plat():
     return "windows" if IS_WIN else "linux"
 
 
-def ensure_xray(force=False):
-    if os.path.exists(XRAY) and not force:
-        return
-    url = XRAY_URL.format(plat=_plat())
+def _exe(name, plat):
+    return name + ".exe" if plat == "windows" else name
+
+
+# The download_* functions take an explicit target so the release builder can
+# fetch Windows binaries on Linux. ensure_* install for this machine into bin/.
+
+def download_xray(plat, dest_dir):
+    url = XRAY_URL.format(plat=plat)
     log.info(TAG, f"downloading Xray-core: {url}")
+    target = os.path.join(dest_dir, _exe("xray", plat))
     with zipfile.ZipFile(io.BytesIO(_get(url, timeout=180))) as z:
-        name = exe("xray")
-        with z.open(name) as src, open(XRAY, "wb") as dst:
+        with z.open(_exe("xray", plat)) as src, open(target, "wb") as dst:
             shutil.copyfileobj(src, dst)
-    os.chmod(XRAY, 0o755)
+    os.chmod(target, 0o755)
     log.ok(TAG, "Xray-core installed")
 
 
-def ensure_geo(force=False):
+def download_geo(dest_dir):
     for f in ("geosite.dat", "geoip.dat"):
-        path = os.path.join(BIN, f)
-        if os.path.exists(path) and not force:
-            continue
+        path = os.path.join(dest_dir, f)
         log.info(TAG, f"downloading Iran geo data: {f}")
         data = _get_any([u.format(f=f) for u in GEO_URLS])
         with open(path + ".tmp", "wb") as out:
             out.write(data)
         os.replace(path + ".tmp", path)
         log.ok(TAG, f"{f} installed ({len(data) // 1024} KB)")
+
+
+def download_tor(plat, tor_dir):
+    v = json.loads(_get(TOR_VERSIONS))["version"]
+    log.info(TAG, f"downloading Tor Expert Bundle {v} ({plat})")
+    blob = _get_any([u.format(v=v, plat=plat) for u in TOR_URLS])
+    shutil.rmtree(tor_dir, ignore_errors=True)
+    os.makedirs(tor_dir)
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
+        t.extractall(tor_dir, filter="data")
+    for root, _, files in os.walk(tor_dir):
+        for f in files:
+            os.chmod(os.path.join(root, f), 0o755)
+    log.ok(TAG, "Tor installed")
+    return v
+
+
+def ensure_xray(force=False):
+    if force or not os.path.exists(XRAY):
+        download_xray(_plat(), BIN)
+
+
+def ensure_geo(force=False):
+    if force or not all(os.path.exists(os.path.join(BIN, f)) for f in ("geosite.dat", "geoip.dat")):
+        download_geo(BIN)
 
 
 def tor_exe():
@@ -88,18 +116,7 @@ def ensure_tor(force=False):
     if os.path.exists(tor_exe()) and not force:
         return True
     try:
-        plat = _plat()
-        v = json.loads(_get(TOR_VERSIONS))["version"]
-        log.info(TAG, f"downloading Tor Expert Bundle {v}")
-        blob = _get_any([u.format(v=v, plat=plat) for u in TOR_URLS])
-        shutil.rmtree(TOR_DIR, ignore_errors=True)
-        os.makedirs(TOR_DIR)
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as t:
-            t.extractall(TOR_DIR, filter="data")
-        for root, _, files in os.walk(TOR_DIR):
-            for f in files:
-                os.chmod(os.path.join(root, f), 0o755)
-        log.ok(TAG, "Tor installed")
+        download_tor(_plat(), TOR_DIR)
         return True
     except Exception as e:  # noqa: BLE001
         log.warn(TAG, f"Tor not installed ({e}); Tor fallback disabled. "

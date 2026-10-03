@@ -41,25 +41,24 @@ your own URLs        ─┘                       │           connection; drop
 
 ## Quick start
 
-### Windows: two clicks
+### Windows: no Python, no internet, no technical skills needed
 
-1. **Get Juggler.** On GitHub press **Code → Download ZIP** and unzip it somewhere permanent, such as `Documents\Juggler`. Or, if you have git:
-   ```powershell
-   git clone https://github.com/KORA612/Juggler.git
-   ```
-2. **Double-click `Install.bat`** once. It:
-   - installs Python if you don't have it (just for you, no admin needed),
-   - installs the two Python packages,
-   - downloads Xray, the Iran geo data and Tor (about 70 MB, only once),
-   - puts a **Juggler** shortcut with the Juggler icon on your Desktop and in the Start menu.
-3. **From then on, just open the Juggler shortcut.** A window with the live log opens, and so does the dashboard at **http://localhost:8765**.
+1. Download **`Juggler-<version>-windows-x64.zip`** from the [Releases page](https://github.com/KORA612/Juggler/releases). It contains everything: the app, Xray, Tor, the Iran geo data, the Python packages and the Python installer.
+2. Right-click the ZIP → **Extract All…**, put the folder somewhere permanent, then double-click **`Install.bat`** inside it.
+   - "Windows protected your PC"? Click **More info → Run anyway**. This happens once.
+   - The installer adds Python if it's missing (just for you, no admin needed). It works offline, then puts a **Juggler** shortcut with the icon on your Desktop and in the Start menu.
+3. From then on, just open **Juggler**. A log window opens, and so does the dashboard at **http://localhost:8765**.
 
-If Windows asks whether to allow Juggler on networks, tick **both Private and Public**. If your phone can't connect later, the dashboard's Phone card tells you why and has an **Allow phone access** button.
+If Windows asks whether to allow Juggler on networks, click **Allow**. If your phone can't connect later, the dashboard's Phone card tells you why and has an **Allow phone access** button. If your antivirus removes `xray.exe` or `tor.exe` (proxy tools are sometimes flagged by mistake), restore them and run `Install.bat` again.
+
+**From source instead:** `git clone https://github.com/KORA612/Juggler.git`, then double-click `Install.bat`. This variant downloads Python, the packages and the binaries, so it needs internet.
 
 ### Linux
 
+Download `Juggler-<version>-linux-x64.tar.gz` from Releases and extract it (or `git clone` the repo), then:
+
 ```bash
-git clone https://github.com/KORA612/Juggler.git && cd Juggler
+cd Juggler
 ./install.sh        # .venv, packages, Xray/geo/Tor, app-menu + Desktop entry with icon
 ./juggler.sh        # or open "Juggler" from the app menu
 ```
@@ -126,6 +125,7 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 Install.bat         Windows one-time installer (runs scripts/install.ps1)
 Juggler.bat         Windows launcher, the target of the shortcuts
 install.sh / juggler.sh   the same pair for Linux
+scripts/build_release.py  builds the offline release archives into dist/
 run.py              entry point: setup → engine → Flask
 juggler/links.py    share link ⇄ Xray outbound (pure, heavily tested)
 juggler/sources.py  fetch cascade: direct → own proxy → Tor → disk cache

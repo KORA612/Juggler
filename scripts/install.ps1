@@ -32,6 +32,10 @@ function Find-Python {
     return $null
 }
 
+# Files from a downloaded ZIP carry the "from the internet" mark; clear it once so
+# SmartScreen doesn't warn again on every launch of Juggler.bat, xray.exe or tor.exe.
+Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+
 Write-Host ""
 Write-Host "  JUGGLER setup" -ForegroundColor Magenta
 Write-Host "  This takes a few minutes the first time. Keep this window open." -ForegroundColor Gray
@@ -42,7 +46,13 @@ $py = Find-Python
 if (-not $py) {
     Info "Python 3.10+ not found, installing it (just for you, no admin needed)..."
     $installed = $false
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
+    $bundled = Get-ChildItem (Join-Path $Root "installers\python-*.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($bundled) {
+        Info "using the bundled installer $($bundled.Name)"
+        Start-Process $bundled.FullName -Wait -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_test=0"
+        $installed = $true
+    }
+    if (-not $installed -and (Get-Command winget -ErrorAction SilentlyContinue)) {
         try {
             winget install -e --id Python.Python.3.13 --scope user --silent `
                 --accept-package-agreements --accept-source-agreements | Out-Host
@@ -68,8 +78,16 @@ Ok "using $py"
 Step 2 "Python packages (Flask, qrcode)"
 & $py -c "import flask, qrcode" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    & $py -m pip install --user --disable-pip-version-check -q -r requirements.txt
-    if ($LASTEXITCODE -ne 0) { Fail "pip could not install the packages (is the internet reachable? try with any VPN on)." }
+    $ok = $false
+    if (Test-Path (Join-Path $Root "wheels")) {   # release ZIP: install offline
+        & $py -m pip install --user --disable-pip-version-check -q --no-index --find-links wheels -r requirements.txt
+        $ok = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $ok) {
+        & $py -m pip install --user --disable-pip-version-check -q -r requirements.txt
+        $ok = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $ok) { Fail "pip could not install the packages (is the internet reachable? try with any VPN on)." }
 }
 Ok "ready"
 

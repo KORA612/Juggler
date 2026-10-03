@@ -6,6 +6,7 @@ import random
 import socket
 import threading
 import time
+import urllib.request
 
 from . import firewall, links, log, sources, sysproxy, tester
 from .links import Node
@@ -21,6 +22,9 @@ DEAD_TTL = 6 * 3600      # a config that failed isn't retried for this long
 KEEP = 50                # alive nodes remembered between cycles
 ACTIVE = 20              # nodes inside the live balancer
 TOR_WAIT = 90
+WATCH_EVERY = 30         # seconds between end-to-end checks through our own proxy
+WATCH_FAILS = 3          # consecutive failures before forcing a refresh (~90 s)
+WATCH_COOLDOWN = 180     # don't force refreshes more often than this (internet may be down)
 
 DEFAULT_WHITELIST = ["geosite:ir", "geosite:category-ir", "regexp:\\.ir$", "geoip:ir",
                      "geoip:private", "localhost"]
@@ -107,6 +111,7 @@ class Engine:
         if not self.nodes:
             self.tor.start("no configs yet")
         threading.Thread(target=self._loop, name="scheduler", daemon=True).start()
+        threading.Thread(target=self._watchdog, name="watchdog", daemon=True).start()
 
     def shutdown(self):
         if self.stopping:
@@ -132,6 +137,33 @@ class Engine:
             self.state["next_refresh"] = time.time() + INTERVAL
             self.wake.wait(INTERVAL)
             self.wake.clear()
+
+    def _probe(self):
+        """Real use, end to end: YouTube's 204 through our own HTTP proxy port."""
+        p = f"http://127.0.0.1:{HTTP_PORT}"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}))
+        try:
+            req = urllib.request.Request(tester.YT_204, headers=tester.UA)
+            with opener.open(req, timeout=10) as r:
+                return r.status == 204
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _watchdog(self):
+        """Don't wait up to 15 minutes when every config in the balancer has died."""
+        watch = Watch()
+        while not self.stopping:
+            time.sleep(WATCH_EVERY)
+            if self.stopping:
+                return
+            busy = self.refresh_lock.locked() or not self.active
+            if watch.observe(None if busy else self._probe(), time.time()):
+                if not self.main.alive():   # xray itself died: bring it back right away
+                    log.warn(TAG, "main xray is not running → restarting it with the current configs")
+                    self._apply(self.active)
+                log.warn(TAG, f"connection lost: {WATCH_FAILS} checks in a row failed through the "
+                              "balancer → refreshing now")
+                self.refresh_now()
 
     def refresh_now(self):
         if self.refresh_lock.locked():
@@ -392,3 +424,23 @@ def pick_candidates(tg_lists, other_lists, room):
     out = _round_robin(tg_lists, room)
     shuffled = [random.sample(l, len(l)) for l in other_lists]
     return out + _round_robin(shuffled, room - len(out))
+
+
+class Watch:
+    """Watchdog decision: trigger after WATCH_FAILS consecutive failed checks, at most
+    once per WATCH_COOLDOWN. observe(None) means "not checked" (refresh running or
+    no configs) and resets the streak."""
+
+    def __init__(self):
+        self.fails = 0
+        self.last = 0
+
+    def observe(self, ok, now):
+        if ok is None or ok:
+            self.fails = 0
+            return False
+        self.fails += 1
+        if self.fails >= WATCH_FAILS and now - self.last >= WATCH_COOLDOWN:
+            self.fails, self.last = 0, now
+            return True
+        return False

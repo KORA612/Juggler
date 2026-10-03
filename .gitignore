@@ -6,3 +6,4 @@ data/
 sources.txt
 bridges.txt
 whitelist.txt
+dist/
