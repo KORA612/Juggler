@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Juggler</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><circle cx='32' cy='32' r='26' fill='%2334d399'/><circle cx='32' cy='32' r='12' fill='%230b1020'/></svg>">
+<link rel="icon" type="image/png" href="/static/icon.png">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
 
 <header class="top">
   <div class="brand">
-    <span class="logo"><span class="orb" id="orb"></span></span>
+    <span class="logo"><img src="/static/icon.png" alt=""><span class="orb" id="orb"></span></span>
     <div>
       <div class="name">Juggler</div>
       <div class="sub" id="subtitle">starting…</div>
@@ -67,7 +67,7 @@
         <div class="ctl-title">Safe mode</div>
         <div class="ctl-desc">Drop configs that travel unencrypted</div>
       </div>
-      <button class="switch" id="safemode" role="switch" aria-checked="true"><span></span></button>
+      <button class="switch" id="safemode" role="switch" aria-checked="false"><span></span></button>
     </div>
     <div class="card funnel" id="funnel"></div>
   </section>
@@ -82,7 +82,7 @@
           <button class="btn ghost small" id="auto" hidden>Back to auto</button>
         </div>
       </div>
-      <div class="table-scroll">
+      <div class="table-wrap"><div class="table-scroll">
         <table>
           <thead><tr>
             <th data-sort="rank">#</th>
@@ -95,7 +95,7 @@
           <tbody id="nodes"></tbody>
         </table>
         <div class="empty" id="nodes-empty">No working configs yet. The first test cycle takes about a minute.</div>
-      </div>
+      </div></div>
     </div>
 
     <div class="side">
@@ -109,7 +109,7 @@
             <div class="copy-field" data-copy-id="sub-url"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
             <label>LAN proxy</label>
             <div class="copy-field"><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
-            <p class="note">Phone and PC on the same Wi-Fi. In v2rayNG: <b>☰ → Subscription group settings → +</b>, paste the URL, then <b>Update subscription</b>.</p>
+            <div class="phone-status" id="phone-status"></div>
           </div>
         </div>
       </div>

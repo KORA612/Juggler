@@ -13,7 +13,7 @@ from .paths import (API_PORT, HTTP_PORT, IS_WIN, RUN, SOCKS_PORT, TOR_HTTP_PORT,
 
 TAG = "XRAY"
 NO_WINDOW = 0x08000000 if IS_WIN else 0
-PROBE_URL = "https://www.gstatic.com/generate_204"
+PROBE_URL = "https://www.youtube.com/generate_204"  # same target the tester uses
 
 _version = None
 

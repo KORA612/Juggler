@@ -153,17 +153,54 @@ function renderSide() {
     $("#sub-qr").src = qrSrc(subUrl);
   }
   $("#lan-socks").textContent = `SOCKS ${S.lan.socks}\nHTTP  ${S.lan.http}`;
+  renderPhone();
   const t = S.tor;
-  $("#tor-status").textContent = !t.installed ? "Tor not installed" : t.ready ? `Tor ready · ${t.bridges} bridge(s)` : `Tor ${t.progress}%`;
+  $("#tor-status").textContent = {
+    missing: "Tor not installed",
+    off: "Tor fallback on standby",
+    starting: `Tor fallback starting… ${t.progress}%`,
+    ready: "Tor fallback active",
+  }[t.status] || "";
   const rep = Object.entries(S.report || {});
   $("#sources").innerHTML = rep.length
     ? rep.map(([u, r]) => `<li><span title="${esc(u)}">${esc(u.replace(/^https?:\/\//, ""))}</span><span><span class="hint">${r.count.toLocaleString()}</span> <span class="path ${r.path}">${r.path}</span></span></li>`).join("")
     : '<li><span>Waiting for the first fetch…</span></li>';
 }
 
+function renderPhone() {
+  const ph = S.phone || {};
+  const out = [];
+  const ls = ph.last_sub;
+  if (ls && ls.ip && !["127.0.0.1", "::1"].includes(ls.ip)) {
+    out.push(ls.count
+      ? `<div class="ps good">✓ Phone fetched ${ls.count} configs ${ago(ls.at)} <span>(${esc(ls.ip)})</span></div>`
+      : `<div class="ps warn">! Phone reached Juggler ${ago(ls.at)} but there were no working configs yet</div>`);
+  } else {
+    out.push(`<div class="ps"><span>No phone has fetched the subscription yet</span></div>`);
+  }
+  const fw = ph.firewall || {};
+  if (fw.supported) {
+    if (fw.checking) out.push(`<div class="ps"><span>Checking Windows Firewall…</span></div>`);
+    else if (fw.error) out.push(`<div class="ps"><span>Firewall check failed: ${esc(fw.error)}</span></div>`);
+    else if (fw.ok) out.push(`<div class="ps good">✓ Firewall allows phones on this ${esc(fw.category)} network</div>`);
+    else {
+      const what = Object.entries(fw.detail || {}).filter(([, v]) => v !== "allowed").map(([k, v]) => `${k}: ${v}`).join(", ");
+      out.push(`<div class="ps bad">✗ Windows Firewall blocks phones on this <b>${esc(fw.category)}</b> network <span>(${esc(what)})</span></div>`);
+      out.push(`<button class="btn small" id="fw-allow">Allow phone access</button>`);
+    }
+  }
+  const html = out.join("");
+  const el = $("#phone-status");
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+}
+
 function render() {
   if (!S) return;
   renderHero(); renderControls(); renderNodes(); renderSide();
+  if (!document.body.classList.contains("ready")) {
+    void document.body.offsetWidth;   // flush the first real state without transitions…
+    document.body.classList.add("ready");   // …then enable them for later changes
+  }
 }
 
 // ---------- countdown ring ----------
@@ -222,9 +259,13 @@ $("#nodes").onclick = async (ev) => {
   }
 };
 
-document.addEventListener("click", (ev) => {
+document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button[data-copy]");
   if (b) copy($("#" + b.dataset.copy).textContent);
+  if (ev.target.closest("#fw-allow")) {
+    try { await api("/api/firewall/allow", "POST"); toast("Approve the Windows prompt; status updates in a few seconds"); setTimeout(poll, 6000); }
+    catch (e) { toast(e.message, true); }
+  }
 });
 
 // ---------- modal ----------

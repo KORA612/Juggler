@@ -1,4 +1,4 @@
-.venv/
+.*/
 __pycache__/
 bin/
 data/
@@ -6,4 +6,3 @@ data/
 sources.txt
 bridges.txt
 whitelist.txt
-.pytest_cache/

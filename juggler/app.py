@@ -7,7 +7,7 @@ import qrcode
 import qrcode.image.svg
 from flask import Flask, Response, abort, jsonify, render_template, request
 
-from . import log
+from . import firewall, log
 
 
 def create_app(engine):
@@ -106,7 +106,13 @@ def create_app(engine):
 
     @app.get("/sub")
     def sub():
-        log.info("WEB", f"subscription fetched by {request.remote_addr}")
-        return Response(engine.subscription(), mimetype="text/plain")
+        return Response(engine.subscription(request.remote_addr), mimetype="text/plain")
+
+    @app.post("/api/firewall/allow")
+    def firewall_allow():
+        ok = firewall.allow()
+        log.info("WEB", "firewall: asked Windows for permission (UAC)" if ok
+                 else "firewall: UAC prompt was declined or unavailable")
+        return jsonify(ok=ok, msg="" if ok else "Windows did not run the change (UAC declined?)"), (200 if ok else 400)
 
     return app

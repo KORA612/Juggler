@@ -11,9 +11,11 @@ No server, no domain, no account. Clone it, double-click it, and it runs.
 Public V2Ray configs on Telegram and GitHub die within hours. Most of them don't work from your network at all. Juggler does the tedious part for you:
 
 ```
-Telegram channels ─┐                       ┌─ stage 1: ping every candidate in parallel
-GitHub aggregators ┼─► parse ─► xray -test ┤   delete every failure (-1), drop Iranian exits
-your own URLs     ─┘                       └─ stage 2: speed-test the 10 best
+30 Telegram channels ─┐                       ┌─ stage 1: YouTube 204 through every candidate,
+ (newest posts first) │                       │           in parallel; delete every failure (-1)
+GitHub aggregators   ─┼─► parse ─► xray -test ┼─ verify:  ~100 KB of real youtube.com on a fresh
+your own URLs        ─┘                       │           connection; drop fakes and Iranian exits
+                                              └─ stage 2: speed-test the 10 best
                                                        │
            ┌───────────────────────────────────────────┘
            ▼
@@ -28,7 +30,9 @@ your own URLs     ─┘                       └─ stage 2: speed-test the 10
 ## Features
 
 - **Every protocol Xray can dial:** VLESS (REALITY / TLS, Vision), VMess, Trojan, Shadowsocks (AEAD and 2022), Hysteria2, WireGuard, SOCKS, HTTP. Transports: raw, ws, grpc, httpupgrade, xhttp, kcp.
-- **Fast, two-stage testing.** About 600 configs are pinged in roughly 25 s. Only the top 10 get a download test, capped at about 15 s. The balancer switches to the new nodes as soon as pings are in, without waiting for the speed tests.
+- **Fresh configs first.** 30 curated Telegram channels are read three pages deep (about 60 posts each, newest first). The big GitHub dumps only fill leftover slots. Configs that failed are skipped for 6 hours, so every cycle explores new ones.
+- **Hard to fool.** Liveness is a real YouTube request, not a Cloudflare ping. Cloudflare-Workers-based configs can't reach Cloudflare and would look dead. Survivors must then pull about 100 KB of youtube.com on a *separate* connection. That catches configs that pass one small request and then get killed or throttled by DPI.
+- **Fast.** About 800 configs are checked in about a minute. Only the top 10 get a download test. The balancer switches to the new nodes as soon as they're verified, without waiting for the speed tests.
 - **Ranked by download speed, then ping,** with flag emoji per exit country (they also render on Windows).
 - **Never stuck when sources are blocked.** Each source is fetched **direct**, then through **Juggler's own proxy**, then through **Tor** (WebTunnel/obfs4 bridges you paste, plus built-in Snowflake/meek), then from the **last cached copy**.
 - **Direct-route whitelist.** Iranian sites (`geosite:ir`, `.ir`, `geoip:ir`) and your LAN skip the proxy. You can add domains, IPs, CIDRs or geosite categories from the dashboard.
@@ -37,35 +41,34 @@ your own URLs     ─┘                       └─ stage 2: speed-test the 10
 
 ## Quick start
 
-### Windows
+### Windows: two clicks
 
-```powershell
-git clone https://github.com/<you>/juggler.git
-cd juggler
-```
+1. **Get Juggler.** On GitHub press **Code → Download ZIP** and unzip it somewhere permanent, such as `Documents\Juggler`. Or, if you have git:
+   ```powershell
+   git clone https://github.com/KORA612/Juggler.git
+   ```
+2. **Double-click `Install.bat`** once. It:
+   - installs Python if you don't have it (just for you, no admin needed),
+   - installs the two Python packages,
+   - downloads Xray, the Iran geo data and Tor (about 70 MB, only once),
+   - puts a **Juggler** shortcut with the Juggler icon on your Desktop and in the Start menu.
+3. **From then on, just open the Juggler shortcut.** A window with the live log opens, and so does the dashboard at **http://localhost:8765**.
 
-Then **double-click `VPN.bat`**. You can also create a desktop shortcut to it.
+If Windows asks whether to allow Juggler on networks, tick **both Private and Public**. If your phone can't connect later, the dashboard's Phone card tells you why and has an **Allow phone access** button.
 
-The first run:
-1. installs `flask` and `qrcode` with pip (only Python 3.10+ is required),
-2. downloads Xray, the Iran geo data and the Tor Expert Bundle into `bin/` (about 70 MB),
-3. opens the dashboard at **http://localhost:8765**.
-
-When Windows Firewall asks about `python.exe` and `xray.exe`, allow **Private networks** so your phone can connect.
-
-### Linux / macOS
+### Linux
 
 ```bash
-git clone https://github.com/<you>/juggler.git
-cd juggler
-./vpn.sh            # creates .venv on first run; add --no-browser for headless use
+git clone https://github.com/KORA612/Juggler.git && cd Juggler
+./install.sh        # .venv, packages, Xray/geo/Tor, app-menu + Desktop entry with icon
+./juggler.sh        # or open "Juggler" from the app menu
 ```
 
-> On macOS, `setup` currently fetches x86_64 Linux/Windows builds only. Arm Macs need `bin/xray` placed manually.
+> macOS is not wired up yet: `setup` only fetches x86_64 Windows/Linux builds.
 
 ### No GitHub access on the new machine?
 
-GitHub downloads may be blocked. Either connect any VPN for the first run (setup goes through the system proxy), or copy the `bin/` folder from a machine that already ran Juggler. Everything in `bin/` is portable between machines with the same OS.
+GitHub downloads may be blocked. Either turn on any VPN just for the install step (the installer goes through the system proxy), or copy the `bin` folder from a machine that already has Juggler. Everything in `bin` is portable between machines with the same OS.
 
 ## Important: test from your real connection
 
@@ -77,7 +80,7 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 |---|---|
 | Browser / any app | SOCKS5 `127.0.0.1:20808` or HTTP `127.0.0.1:20809` |
 | All Windows apps | Dashboard → **System proxy** |
-| Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. |
+| Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
 | Pick a specific node | **Use** pins it. **Back to auto** returns to automatic lowest-ping selection. |
 | Refresh now | **Refresh now** in the dashboard, or wait for the 15-minute timer. |
@@ -88,7 +91,7 @@ These plain-text files are created on first run. Edit them in the dashboard or w
 
 | File | What |
 |---|---|
-| `sources.txt` | Telegram web previews (`https://t.me/s/<channel>`) or subscription URLs (plain or base64), one per line |
+| `sources.txt` | Telegram web previews (`https://t.me/s/<channel>`, paginated automatically) or subscription URLs (plain or base64), one per line. Ships with 30 active channels and 3 GitHub aggregators. |
 | `bridges.txt` | Tor bridges from [@GetBridgesBot](https://t.me/GetBridgesBot) or [bridges.torproject.org](https://bridges.torproject.org). WebTunnel works best in Iran. |
 | `whitelist.txt` | Direct-route entries: `example.com`, `full:x.com`, `keyword:bank`, `regexp:…`, `geosite:<cat>`, `geoip:<cc>`, an IP or a CIDR. Each change is validated with `xray -test` before it is applied. |
 
@@ -99,7 +102,7 @@ Ports, intervals and test budgets are constants at the top of `juggler/paths.py`
 - **Public configs are strangers' servers.** The operator can see your IP and which sites you visit; HTTPS content stays private. Avoid banking and other sensitive logins through them, and use Tor Browser for anything that must stay anonymous.
 - **Safe mode** (on by default) drops configs that send traffic over the wire unencrypted: VLESS, Trojan, SOCKS or HTTP without TLS or REALITY, and Shadowsocks `none`. Configs with `allowInsecure` are always dropped, because Xray refuses them.
 - **The dashboard API is localhost-only.** Other LAN devices can reach `/sub` and the proxy ports, nothing else.
-- **No telemetry.** Juggler only talks to your sources, `cloudflare.com` (connectivity and speed tests) and GitHub / torproject.org (first-run downloads).
+- **No telemetry.** Juggler only talks to your sources, the test targets (`youtube.com`, `cloudflare.com`, `cachefly.net`, plus `api.country.is` / `ipinfo.io` for exit countries) and GitHub / torproject.org (first-run downloads). Test traffic goes *through* the configs being tested.
 
 ## Troubleshooting
 
@@ -108,7 +111,7 @@ Ports, intervals and test budgets are constants at the top of `juggler/paths.py`
 | Very few configs alive | Normal on heavily filtered networks; survivors are kept across cycles. Add more sources. |
 | Sources show `CACHE` | Every fetch path failed. Add working WebTunnel bridges so the Tor path can work. |
 | Tor stuck below 100% | The built-in bridges are blocked. Paste fresh WebTunnel bridges. Bridges whose domain resolves to `10.10.34.x` are DNS-poisoned and won't work. |
-| Phone can't fetch `/sub` | Same Wi-Fi? Windows network profile set to *Private*? Firewall allowed? |
+| v2rayNG says "Failure" | Check the dashboard's Phone card. **"Firewall blocks phones on this Private network"** means Windows was only allowed on Public networks, so press **Allow phone access**. If it says the phone reached Juggler but there were no working configs, wait for the first test cycle. Also open the URL in the phone's browser: you should see a long block of text. Some office Wi-Fi networks block devices from reaching each other. |
 | `port 8765 busy` | Juggler is already running in another window. |
 
 ## Development
@@ -120,14 +123,18 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 ```
 
 ```
+Install.bat         Windows one-time installer (runs scripts/install.ps1)
+Juggler.bat         Windows launcher, the target of the shortcuts
+install.sh / juggler.sh   the same pair for Linux
 run.py              entry point: setup → engine → Flask
 juggler/links.py    share link ⇄ Xray outbound (pure, heavily tested)
 juggler/sources.py  fetch cascade: direct → own proxy → Tor → disk cache
-juggler/tester.py   two-stage test via one temporary xray with an HTTP inbound per node
+juggler/tester.py   YouTube liveness → real-use verify → speed, via one temporary xray (an HTTP inbound per node)
 juggler/xray.py     config builders, validation (bisection), main instance + API
 juggler/engine.py   refresh loop, state, dashboard actions
 juggler/tor.py      Tor + lyrebird (WebTunnel / obfs4 / Snowflake / meek)
 juggler/sysproxy.py Windows system proxy with snapshot and restore
+juggler/firewall.py Windows Firewall diagnosis + one-click (UAC) allow rule for phones
 juggler/procs.py    child processes die with the app (Windows Job Object)
 juggler/app.py      Flask routes, SSE log stream, QR codes, /sub
 ```

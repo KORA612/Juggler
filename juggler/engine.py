@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 
-from . import links, log, sources, sysproxy, tester
+from . import firewall, links, log, sources, sysproxy, tester
 from .links import Node
 from .paths import (BRIDGES_TXT, HTTP_PORT, SOCKS_PORT, SOURCES_TXT, STATE_JSON, WEB_PORT,
                     WHITELIST_TXT, read_lines, write_lines)
@@ -16,7 +16,8 @@ from .xray import MainXray, build_main, test_config, validate
 
 TAG = "JUGGLER"
 INTERVAL = 15 * 60
-MAX_CANDIDATES = 600     # tested per cycle (random sample of the fresh links + survivors)
+MAX_CANDIDATES = 800     # tested per cycle: survivors, then newest Telegram, then GitHub
+DEAD_TTL = 6 * 3600      # a config that failed isn't retried for this long
 KEEP = 50                # alive nodes remembered between cycles
 ACTIVE = 20              # nodes inside the live balancer
 TOR_WAIT = 90
@@ -54,14 +55,14 @@ class Engine:
         self.active = []         # what the main balancer currently holds
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
                       "last_refresh": 0, "next_refresh": 0, "report": {}, "stats": {},
-                      "pinned": None}
+                      "pinned": None, "dead": {}, "last_sub": None}
         self._ensure_files()
         self._load()
 
     # ---------- persistence ----------
 
     def _ensure_files(self):
-        if not os.path.exists(SOURCES_TXT):
+        if not os.path.exists(SOURCES_TXT) or read_lines(SOURCES_TXT) == sources.LEGACY_DEFAULT:
             write_lines(SOURCES_TXT, sources.DEFAULT_SOURCES, SOURCES_HEADER)
         if not os.path.exists(WHITELIST_TXT):
             write_lines(WHITELIST_TXT, DEFAULT_WHITELIST, WHITELIST_HEADER)
@@ -98,13 +99,13 @@ class Engine:
         if sp.get("on") and sysproxy.is_ours(HTTP_PORT):
             log.warn("PROXY", "restoring system proxy left on by a previous crash")
             self.set_sysproxy(False)
-        if self.tor.available():
-            self.tor.start()
-        else:
+        if not self.tor.available():
             log.warn("TOR", "Tor not installed; the Tor fallback is off")
         if self.nodes:
             log.info(TAG, f"starting with {len(self.nodes)} cached nodes from last run")
         self._apply(self.nodes[:ACTIVE])
+        if not self.nodes:
+            self.tor.start("no configs yet")
         threading.Thread(target=self._loop, name="scheduler", daemon=True).start()
 
     def shutdown(self):
@@ -166,19 +167,21 @@ class Engine:
         fetched, report = sources.fetch_all(urls, proxy_ok=bool(self.active),
                                             tor_ok=self.tor.is_ready())
         failed = [u for u, r in report.items() if r["path"] in ("cache", "none")]
-        if failed and self.tor.available() and not self.tor.is_ready():
-            log.info("TOR", f"{len(failed)} source(s) failed; waiting up to {TOR_WAIT}s for Tor")
-            if self.tor.ready.wait(TOR_WAIT):
-                again, rep2 = sources.fetch_all(failed, proxy_ok=False, tor_ok=True)
-                for u in failed:
-                    if rep2[u]["path"] == "tor":
-                        fetched[u], report[u] = again[u], rep2[u]
+        if failed and not self.tor.is_ready() and self.tor.ensure(
+                TOR_WAIT, f"{len(failed)} source(s) unreachable directly and via proxy"):
+            again, rep2 = sources.fetch_all(failed, proxy_ok=False, tor_ok=True)
+            for u in failed:
+                if rep2[u]["path"] == "tor":
+                    fetched[u], report[u] = again[u], rep2[u]
         self.state["report"] = report
 
-        # candidates: survivors first, then a random sample of fresh links per source
+        # candidates: survivors, then fresh links (Telegram newest first, GitHub sampled),
+        # skipping anything that failed within DEAD_TTL so each cycle explores new configs
         safe = self.state.get("safe_mode", True)
+        now = time.time()
+        dead = {k: t for k, t in self.state.get("dead", {}).items() if now - t < DEAD_TTL}
         known = {n.id for n in self.nodes}
-        per_source, total_links, parsed = [], 0, 0
+        tg, other, total_links, parsed, skipped = [], [], 0, 0, 0
         for url, found in fetched.items():
             total_links += len(found)
             fresh = []
@@ -190,22 +193,27 @@ class Engine:
                 if n.id in known or (safe and not links.is_safe(n)):
                     continue
                 known.add(n.id)
+                if n.id in dead:
+                    skipped += 1
+                    continue
                 n.source = url
-                n.first_seen = time.time()
+                n.first_seen = now
                 fresh.append(n)
-            per_source.append(fresh)
+            (tg if sources.is_telegram(url) else other).append(fresh)
         survivors = [n for n in self.nodes if not safe or links.is_safe(n)]
-        room = max(MAX_CANDIDATES - len(survivors), 0)
-        pool = [n for lst in per_source for n in lst]
-        fresh_pick = _fair_sample(per_source, room)
+        pool = sum(len(l) for l in tg + other)
+        fresh_pick = pick_candidates(tg, other, max(MAX_CANDIDATES - len(survivors), 0))
         candidates = survivors + fresh_pick
 
         self.phase = "testing"
         valid = validate(candidates)
-        stats = {"links": total_links, "parsed": parsed, "fresh": len(pool),
+        stats = {"links": total_links, "parsed": parsed, "fresh": pool,
                  "candidates": len(candidates), "valid": len(valid)}
-        log.info(TAG, f"{total_links} links → {parsed} parsed → {len(pool)} new unique"
-                      f" → testing {len(valid)} ({len(survivors)} survivors + {len(fresh_pick)} new)")
+        n_tg = sum(1 for n in fresh_pick if sources.is_telegram(n.source))
+        log.info(TAG, f"{total_links} links → {parsed} parsed → {pool} new unique"
+                      + (f" ({skipped} failed recently, skipped)" if skipped else "")
+                      + f" → testing {len(valid)}: {len(survivors)} survivors + {n_tg} Telegram"
+                      f" + {len(fresh_pick) - n_tg} other")
 
         def on_stage1(alive):
             self.phase = "speed"
@@ -214,7 +222,12 @@ class Engine:
             self._apply(alive[:ACTIVE])
             self.save()
 
-        final = tester.run(valid, on_stage1=on_stage1)
+        final = tester.run(valid, on_stage1=on_stage1, stats=stats)
+        alive_ids = {n.id for n in final}
+        for n in valid:
+            if n.id not in alive_ids:
+                dead[n.id] = now
+        self.state["dead"] = dead
         with self.state_lock:
             self.nodes = final[:KEEP]
             stats["alive"] = len(final)
@@ -230,6 +243,11 @@ class Engine:
         else:
             log.warn(TAG, f"cycle done in {time.time() - t0:.0f}s · no working nodes"
                           + (" · traffic goes through Tor" if self.tor.available() else ""))
+        # Tor is a fallback, not a service: keep it only while nothing else carries traffic.
+        if final:
+            self.tor.stop("configs are working again")
+        else:
+            self.tor.start("no working configs, traffic falls back to Tor")
 
     # ---------- dashboard actions ----------
 
@@ -286,8 +304,9 @@ class Engine:
                         "bridges": (BRIDGES_TXT, BRIDGES_HEADER)}[which]
         write_lines(path, [l.strip() for l in lines if l.strip()], header)
         log.ok(TAG, f"{which} saved")
-        if which == "bridges" and self.tor.available():
-            self.tor.start()
+        if which == "bridges" and self.tor.running():
+            self.tor.stop()
+            self.tor.start("bridges changed")
 
     def pin(self, node_id):
         if not node_id:
@@ -305,7 +324,13 @@ class Engine:
 
     # ---------- views ----------
 
-    def subscription(self):
+    def subscription(self, client_ip=""):
+        self.state["last_sub"] = {"at": time.time(), "ip": client_ip, "count": len(self.nodes)}
+        if not self.nodes:
+            log.warn("WEB", f"subscription fetched by {client_ip} but there are no working configs yet "
+                            "- v2rayNG will report Failure")
+        else:
+            log.ok("WEB", f"subscription fetched by {client_ip} · {len(self.nodes)} configs")
         lines = []
         for n in self.nodes:
             sp = f" · {n.speed_kbps / 1000:.1f}Mbps" if n.speed_kbps > 0 else ""
@@ -338,31 +363,32 @@ class Engine:
             "mode": "nodes" if self.active else ("tor" if self.tor.available() else "direct"),
             "xray": self.main.alive(),
             "tor": {"installed": self.tor.available(), "ready": self.tor.is_ready(),
-                    "progress": self.tor.progress, "bridges": len(self.text_file("bridges"))},
+                    "status": self.tor.status(), "progress": self.tor.progress,
+                    "bridges": len(self.text_file("bridges"))},
             "safe_mode": self.state.get("safe_mode", True),
             "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False)},
             "report": self.state.get("report", {}),
             "stats": self.state.get("stats", {}),
             "lan": {"ip": ip, "sub": f"http://{ip}:{WEB_PORT}/sub",
                     "socks": f"{ip}:{SOCKS_PORT}", "http": f"{ip}:{HTTP_PORT}"},
+            "phone": {"last_sub": self.state.get("last_sub"), "firewall": firewall.status(ip)},
         }
 
 
-def _fair_sample(lists, room):
-    """Round-robin over sources so one huge aggregator can't crowd out Telegram;
-    random within each source so successive cycles explore different links.
-    Telegram lists are newest-first, so they keep their order."""
-    shuffled = []
-    for lst in lists:
-        lst = list(lst)
-        if lst and "t.me/s/" not in lst[0].source:
-            random.shuffle(lst)
-        shuffled.append(lst)
-    out = []
-    i = 0
-    while len(out) < room and any(i < len(l) for l in shuffled):
-        for l in shuffled:
+def _round_robin(lists, room):
+    out, i = [], 0
+    while len(out) < room and any(i < len(l) for l in lists):
+        for l in lists:
             if i < len(l) and len(out) < room:
                 out.append(l[i])
         i += 1
     return out
+
+
+def pick_candidates(tg_lists, other_lists, room):
+    """Fresh configs are the ones most likely to work, so Telegram channels (each
+    newest first, interleaved) come first. Big GitHub dumps fill the rest, randomly
+    sampled so successive cycles explore different parts of them."""
+    out = _round_robin(tg_lists, room)
+    shuffled = [random.sample(l, len(l)) for l in other_lists]
+    return out + _round_robin(shuffled, room - len(out))

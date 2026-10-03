@@ -156,3 +156,12 @@ def test_rename_keeps_config(link):
 def test_flag():
     assert links.flag("de") == "🇩🇪"
     assert links.flag("") == "🏳️"
+
+
+def test_vmess_with_broken_json_is_recovered():
+    # Real ConfigsHUB post: an unquoted emoji makes the JSON invalid.
+    raw = ('{"add": "rvz.example.com", "aid": "0", "host": "", "id": "%s", "net": "tcp", '
+           '"path": "", "port": "8080", "ps": [\U0001F3C1]t.me/ConfigsHub", "scy": "auto", '
+           '"tls": "", "type": "", "v": "2"}' % UUID)
+    n = links.parse("vmess://" + b64(raw))
+    assert n and n.host == "rvz.example.com" and n.port == 8080 and n.net == "raw"

@@ -85,12 +85,12 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; gap: 12px; align-items: center; }
-.logo {
-  width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center;
-  background: linear-gradient(135deg, var(--accent-soft), var(--indigo-soft));
-  border: 1px solid var(--border-strong);
+.logo { position: relative; width: 38px; height: 38px; flex: none; }
+.logo img { width: 38px; height: 38px; border-radius: 10px; display: block; }
+.orb {
+  position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--faint); border: 2px solid var(--bg); transition: background .3s;
 }
-.orb { width: 12px; height: 12px; border-radius: 50%; background: var(--faint); transition: background .3s; }
 .orb.on { background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: pulse 2.4s infinite; }
 .orb.tor { background: var(--indigo); }
 .orb.off { background: var(--red); }
@@ -130,7 +130,8 @@ h2 { font-size: 14px; font-weight: 650; margin: 0; letter-spacing: .01em; displa
 .hint { color: var(--muted); font-size: 12.5px; }
 .count { font-size: 12px; font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 1px 8px; border-radius: 999px; }
 .row { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 18px; }
-.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: start; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: stretch; }
+.side { align-self: start; }
 .side { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
 .grid > *, .row > *, .side > * { min-width: 0; }
 @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr 1fr; } .funnel { grid-column: 1 / -1; } }
@@ -198,12 +199,15 @@ h1 { font-size: clamp(20px, 2.6vw, 28px); line-height: 1.2; margin: 4px 0 12px; 
 .control.disabled { opacity: .5; }
 .switch {
   width: 48px; height: 28px; flex: none; border-radius: 999px; position: relative;
-  background: var(--surface-2); border: 1px solid var(--border-strong); transition: background .2s;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
 }
 .switch span {
   position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
-  background: var(--muted); transition: transform .22s cubic-bezier(.3, 1.4, .5, 1), background .2s;
+  background: var(--muted);
 }
+/* animate only after the first real state arrived, so loading never flashes a wrong value */
+body.ready .switch { transition: background .2s; }
+body.ready .switch span { transition: transform .22s cubic-bezier(.3, 1.4, .5, 1), background .2s; }
 .switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
 .switch[aria-checked="true"] span { transform: translateX(20px); background: #fff; }
 .switch[disabled] { cursor: not-allowed; }
@@ -217,10 +221,15 @@ h1 { font-size: clamp(20px, 2.6vw, 28px); line-height: 1.2; margin: 4px 0 12px; 
 .step.final b { color: var(--accent); }
 
 /* ---------- table ---------- */
-.table-card { padding: 20px 0 8px; }
+/* The table takes exactly the height of the right column: its rows are absolutely
+   positioned so they don't size the grid row; they scroll inside instead. */
+.table-card { padding: 20px 0 8px; display: flex; flex-direction: column; }
+.table-wrap { position: relative; flex: 1; min-height: 420px; }
+.table-wrap .table-scroll { position: absolute; inset: 0; }
+@media (max-width: 1100px) { .table-wrap { min-height: 70vh; } }
 .table-card .card-head { padding: 0 20px; }
 .head-actions { display: flex; align-items: center; gap: 10px; }
-.table-scroll { overflow: auto; max-height: 640px; }
+.table-scroll { overflow: auto; }
 thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-2); }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th {
@@ -274,6 +283,13 @@ label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; col
 .copy-field code { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .copy-field .mini { flex: none; }
 .note { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+.phone-status { display: grid; gap: 6px; font-size: 12.5px; }
+.phone-status .ps { display: flex; gap: 8px; align-items: flex-start; }
+.phone-status .ps.good { color: var(--accent); }
+.phone-status .ps.warn { color: var(--amber); }
+.phone-status .ps.bad { color: var(--red); }
+.phone-status .ps span { color: var(--muted); }
+.phone-status .btn { justify-self: start; }
 
 /* ---------- whitelist ---------- */
 .add-row { display: flex; gap: 8px; margin-bottom: 12px; }
@@ -288,7 +304,8 @@ textarea { width: 100%; min-height: 120px; font: 12.5px/1.5 var(--mono); resize:
 .chip button:hover { background: var(--red-soft); color: var(--red); }
 
 /* ---------- sources ---------- */
-.sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr); }
+.sources { list-style: none; margin: 0; padding: 0 4px 0 0; display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr);
+  max-height: 232px; overflow-y: auto; }
 .sources li { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 12.5px; }
 .sources li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); min-width: 0; }
 .sources li span:last-child { flex: none; }
@@ -297,6 +314,7 @@ textarea { width: 100%; min-height: 120px; font: 12.5px/1.5 var(--mono); resize:
 .path.proxy { color: var(--indigo); background: var(--indigo-soft); }
 .path.tor { color: #c084fc; background: rgba(192, 132, 252, .14); }
 .path.cache { color: var(--amber); background: var(--amber-soft); }
+.path.kept { color: var(--muted); background: var(--surface-2); }
 .path.none { color: var(--red); background: var(--red-soft); }
 details.editor { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 details.editor summary { cursor: pointer; color: var(--muted); font-size: 13px; }

@@ -70,16 +70,16 @@ def test_bypass_list():
     assert len(b) == len(set(b))
 
 
-def test_fair_sample_round_robin():
-    a = [links.parse(f"trojan://p{i}@a{i}.com:443") for i in range(10)]
-    t = [links.parse(f"trojan://q{i}@t{i}.com:443") for i in range(3)]
-    for n in a:
-        n.source = "https://raw.githubusercontent.com/x"
-    for n in t:
-        n.source = "https://t.me/s/chan"
-    pick = engine._fair_sample([a, t], 6)
-    assert len(pick) == 6
-    assert [n.id for n in pick if n.source.startswith("https://t.me")] == [n.id for n in t]
+def test_pick_candidates_telegram_first_then_github():
+    gh = [links.parse(f"trojan://p{i}@a{i}.com:443") for i in range(10)]
+    t1 = [links.parse(f"trojan://q{i}@t{i}.com:443") for i in range(3)]
+    t2 = [links.parse(f"trojan://r{i}@u{i}.com:443") for i in range(2)]
+    pick = engine.pick_candidates([t1, t2], [gh], 8)
+    assert len(pick) == 8
+    # Telegram channels interleaved, newest (list head) first, before any GitHub link
+    assert [n.id for n in pick[:5]] == [t1[0].id, t2[0].id, t1[1].id, t2[1].id, t1[2].id]
+    assert {n.id for n in pick[5:]} <= {n.id for n in gh}
+    assert len(engine.pick_candidates([t1], [gh], 2)) == 2
 
 
 def test_rank_key_speed_then_ping():

@@ -249,14 +249,32 @@ def _vless_like(proto, link):
         "protocol": proto, "settings": settings, "streamSettings": ss}
 
 
+def _lenient_json(raw):
+    """VMess JSON as channels actually post it. Some break it, e.g. an unquoted
+    emoji in "ps": [🏁]t.me/x - so fall back to pulling "key": value pairs out."""
+    try:
+        j = json.loads(raw)
+        if isinstance(j, dict):
+            return j
+    except ValueError:
+        pass
+    j = {}
+    for k, quoted, bare in re.findall(r'"(\w+)"\s*:\s*(?:"([^"]*)"|([^,}]*))', raw):
+        j[k] = quoted if quoted or not bare else bare.strip()
+    if not j.get("add") or not j.get("id"):
+        raise Unsupported("bad vmess json")
+    return j
+
+
 def _vmess(link):
     body = link[len("vmess://"):]
     if "@" in body.split("?")[0]:
         return _vless_like("vmess", link)
     try:
-        j = json.loads(b64decode(body.split("#")[0]).decode("utf-8", "replace"))
+        raw = b64decode(body.split("#")[0]).decode("utf-8", "replace")
     except (ValueError, binascii.Error):
-        raise Unsupported("bad vmess json")
+        raise Unsupported("bad vmess base64")
+    j = _lenient_json(raw)
     if str(j.get("aid", "0")).strip() not in ("0", ""):
         raise Unsupported("legacy alterId")
     host, port = str(j.get("add", "")).strip(), _port(j.get("port"))
