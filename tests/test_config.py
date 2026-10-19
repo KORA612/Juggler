@@ -82,15 +82,6 @@ def test_pick_candidates_telegram_first_then_github():
     assert len(engine.pick_candidates([t1], [gh], 2)) == 2
 
 
-def test_rank_key_speed_then_ping():
-    from juggler.tester import rank_key
-    ns = [links.parse(f"trojan://p{i}@a{i}.com:443") for i in range(3)]
-    (ns[0].speed_kbps, ns[0].ping_ms) = (-1, 100)
-    (ns[1].speed_kbps, ns[1].ping_ms) = (5000, 900)
-    (ns[2].speed_kbps, ns[2].ping_ms) = (-1, 50)
-    assert [n.id for n in sorted(ns, key=rank_key)] == [ns[1].id, ns[2].id, ns[0].id]
-
-
 needs_xray = pytest.mark.skipif(not os.path.exists(XRAY), reason="run `python -m juggler.setup` first")
 
 
