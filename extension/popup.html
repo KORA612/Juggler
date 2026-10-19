@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Juggler</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <img src="icons/icon48.png" alt="" class="logo">
+  <div class="brand"><b>Juggler</b><span id="sub">checking…</span></div>
+  <button id="dash" class="ghost" title="Open the full dashboard">Dashboard ↗</button>
+</header>
+
+<section class="toggle-row">
+  <div>
+    <div class="t">Route Chrome through Juggler</div>
+    <div class="d" id="toggle-desc">Only this browser. .ir and local sites stay direct.</div>
+  </div>
+  <button class="switch" id="route" role="switch" aria-checked="false"><span></span></button>
+</section>
+
+<section id="offline" class="offline" hidden>
+  <b>Juggler isn't running.</b>
+  Open <b>Juggler</b> from your Desktop or Start menu, then reopen this popup.
+</section>
+
+<section id="hero" class="hero" hidden>
+  <div class="flag" id="flag">🏳️</div>
+  <div class="info">
+    <div class="eyebrow" id="eyebrow">Connected</div>
+    <div class="title" id="title"></div>
+    <div class="chips" id="chips"></div>
+  </div>
+</section>
+
+<section id="list-wrap" hidden>
+  <div class="list-head"><span>Best configs</span><button id="auto" class="ghost small" hidden>Back to auto</button></div>
+  <ul id="list"></ul>
+</section>
+
+<footer id="foot" hidden>
+  <span id="stats"></span>
+  <button id="refresh" class="ghost small">Refresh now</button>
+</footer>
+<script src="popup.js"></script>
+</body>
+</html>

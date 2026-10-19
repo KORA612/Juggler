@@ -69,6 +69,22 @@ cd Juggler
 
 GitHub downloads may be blocked. Either turn on any VPN just for the install step (the installer goes through the system proxy), or copy the `bin` folder from a machine that already has Juggler. Everything in `bin` is portable between machines with the same OS.
 
+## Chrome / Edge extension
+
+<img src="docs/extension.png" width="300" align="right" alt="Juggler extension popup">
+
+A small companion for when you only want **the browser** to go through Juggler, without touching the Windows system proxy:
+
+- One switch routes Chrome (or Edge) through Juggler. Your whitelist (`.ir`, LAN) stays direct.
+- See the config in use, switch to another one, or refresh, right from the toolbar.
+- The badge shows **ON** when routed, and **!** when Juggler isn't running.
+
+The extension can't run Xray itself (browsers only speak plain HTTP/SOCKS proxies), so **Juggler must be running** on the same PC.
+
+**Install:** open `chrome://extensions` (or `edge://extensions`) → switch on **Developer mode** → **Load unpacked** → pick the `extension` folder inside your Juggler folder. A Chrome Web Store listing would remove the Developer-mode step. The store-ready ZIP is built by `scripts/build_release.py chrome`.
+
+<br clear="right">
+
 ## Important: test from your real connection
 
 Turn **other VPNs off** while Juggler is running. Juggler measures which configs work *from where your traffic leaves the machine*. If that is another VPN, the results describe that VPN, not your network.
@@ -125,7 +141,8 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 Install.bat         Windows one-time installer (runs scripts/install.ps1)
 Juggler.bat         Windows launcher, the target of the shortcuts
 install.sh / juggler.sh   the same pair for Linux
-scripts/build_release.py  builds the offline release archives into dist/
+scripts/build_release.py  builds the offline release archives + extension ZIP into dist/
+extension/                Chrome / Edge companion extension (Manifest V3)
 run.py              entry point: setup → engine → Flask
 juggler/links.py    share link ⇄ Xray outbound (pure, heavily tested)
 juggler/sources.py  fetch cascade: direct → own proxy → Tor → disk cache

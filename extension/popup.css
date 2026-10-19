@@ -1,0 +1,64 @@
+@font-face {
+  font-family: "Twemoji Country Flags";
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E007F;
+  src: url("fonts/TwemojiCountryFlags.woff2") format("woff2");
+}
+:root {
+  --bg: #0b1020; --surface: rgba(255,255,255,.05); --surface-2: rgba(255,255,255,.08);
+  --border: rgba(255,255,255,.09); --text: #e8ebf4; --muted: #8a93a8; --accent: #34d399;
+  --accent-soft: rgba(52,211,153,.14); --red: #f87171; --amber: #fbbf24;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f6f8fc; --surface: #fff; --surface-2: rgba(15,23,42,.05); --border: rgba(15,23,42,.1);
+          --text: #0f172a; --muted: #5b6478; --accent: #059669; --accent-soft: rgba(5,150,105,.1);
+          --red: #dc2626; --amber: #b45309; color-scheme: light; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; width: 360px; background: var(--bg); color: var(--text);
+       font: 13px/1.45 "Twemoji Country Flags", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+button { font: inherit; color: inherit; cursor: pointer; }
+header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.logo { width: 32px; height: 32px; border-radius: 8px; }
+.brand { display: grid; flex: 1; line-height: 1.25; }
+.brand b { font-size: 15px; }
+.brand span { color: var(--muted); font-size: 12px; }
+.ghost { background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px; }
+.ghost:hover { border-color: var(--accent); color: var(--accent); }
+.small { font-size: 12px; padding: 3px 8px; }
+section { margin: 10px 12px; }
+.toggle-row { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; }
+.t { font-weight: 650; }
+.d { color: var(--muted); font-size: 12px; }
+.switch { width: 44px; height: 26px; flex: none; border-radius: 999px; position: relative;
+  background: var(--surface-2); border: 1px solid var(--border); }
+.switch span { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--muted); }
+.switch[aria-checked="true"] { background: var(--accent); border-color: transparent; }
+.switch[aria-checked="true"] span { transform: translateX(18px); background: #fff; }
+body.ready .switch, body.ready .switch span { transition: all .2s; }
+.offline { background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.3); color: var(--text);
+  border-radius: 12px; padding: 11px 12px; }
+.hero { display: flex; gap: 12px; align-items: center; background: linear-gradient(135deg, var(--accent-soft), transparent 60%), var(--surface);
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.flag { font-size: 34px; line-height: 1; width: 52px; height: 52px; display: grid; place-items: center;
+  background: var(--surface-2); border-radius: 12px; flex: none; }
+.eyebrow { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.title { font-size: 16px; font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.chip { font-size: 11.5px; color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.chip b { color: var(--text); }
+.list-head { display: flex; justify-content: space-between; align-items: center; color: var(--muted);
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; margin: 0 2px 6px; }
+ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+li { display: grid; grid-template-columns: 26px 1fr auto auto; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
+li.active { border-color: var(--accent); }
+li .f { font-size: 18px; }
+li .n { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+li .n small { color: var(--muted); display: block; font-size: 11px; }
+li .p { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+li .use { font-size: 11.5px; padding: 2px 8px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); border: 0; }
+li .live { color: var(--accent); font-size: 11.5px; font-weight: 600; }
+footer { display: flex; justify-content: space-between; align-items: center; color: var(--muted);
+  font-size: 12px; padding: 9px 14px 12px; border-top: 1px solid var(--border); }
