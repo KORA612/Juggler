@@ -3,11 +3,15 @@
 Feedback after two weeks of daily use (2026-10-19). **P0** = fixes the "it keeps dropping me" experience.
 Each item: *problem → plan → cost / pushback → done when.*
 
+> **v1.5.0 (2026-10-19):** perpetual scored engine, per-site matrix, sticky in-use config with live xray
+> updates, outage guard, false-negative sampling, paste / Test / Test all, `/ping`, Tor noise summary,
+> Chrome/Edge extension. Items below marked [x] shipped in it.
+
 ---
 
 ## P0 · Ship what's already fixed
 
-- [ ] **Release v1.4.1 with the memory fix.** Every HTTPS test request built a fresh TLS context (CA store loaded into OpenSSL each time). That held ~1 GB RAM forever. With one shared context it's ~340 MB peak, ~210 MB idle. The fix is in `tester.py`, `sources.py` and `engine.py`, uncommitted, and is **not** in the v1.4.0 release.
+- [x] **Ship the memory fix** (in v1.5.0). Every HTTPS test request built a fresh TLS context (CA store loaded into OpenSSL each time). That held ~1 GB RAM forever. With one shared context it's ~340 MB peak, ~210 MB idle. The fix is in `tester.py`, `sources.py` and `engine.py`, uncommitted, and is **not** in the v1.4.0 release.
 
 ---
 
@@ -16,25 +20,25 @@ Each item: *problem → plan → cost / pushback → done when.*
 **Problem.** Every 15 minutes the whole pool is re-tested once, and anything that fails that single test is dropped. One flaky handshake, a DPI hiccup or a 5-second stall throws away a config that worked all morning. The balancer is rebuilt and the active connection is cut, even when the old config was fine.
 
 **Plan.**
-- [ ] **A persistent pool with a score per config**, stored in `state.json` and surviving restarts:
+- [x] **A persistent pool with a score per config**, stored in `state.json` and surviving restarts:
   - `success_ewma`: rolling success rate, recent checks weigh more.
   - `latency_ms_ewma`, `throughput_ewma`.
   - `sites{youtube, google, instagram, telegram}` (see Testing).
   - `last_ok`, `consecutive_fails`, `first_seen`, `source`, `manual` flag.
   - **The score combines reliability first, site coverage second, latency third and speed last.** Speed must never outrank "it actually loads".
-- [ ] **Continuous, budgeted testing instead of cycles:**
+- [x] **Continuous, budgeted testing instead of cycles:**
   - **Active set (~20):** cheap liveness probe each, every ~60 s, staggered so it's never a burst.
   - **Warm reserve (~50–100):** full check every ~10 min.
   - **Explore:** a trickle of new candidates, e.g. 50 every 2 min, instead of 800 at once.
   - **Fetching sources** stays on its own timer (15–30 min) and only *adds* candidates; it never resets the pool.
-- [ ] **Hysteresis, no single-failure kills:**
+- [x] **Hysteresis, no single-failure kills:**
   - A config is demoted gradually and removed only after K consecutive failures spread over time (e.g. 3 failures across 10+ min), or when its score drops below a floor.
   - A failed check is retried once at once with a longer timeout before it counts. Iranian links have high latency spikes.
-- [ ] **A sticky active config.**
+- [x] **A sticky active config.**
   - Never switch away from a config that is still passing just because a "faster" one appeared.
   - Switch only when the current one degrades, or a candidate beats it by a clear margin (e.g. +25 % score) *and* has been stable for N checks.
   - Use `xray api bo` to pin the chosen config, and keep the balancer as instant failover underneath.
-- [ ] **Changes to the main Xray become additive.**
+- [x] **Changes to the main Xray become additive.**
   - Add or remove outbounds with `xray api ado/rmo` instead of restarting the process, so open connections (YouTube video, calls) survive.
   - Fall back to a restart only when the whitelist changes.
 
@@ -49,15 +53,15 @@ Each item: *problem → plan → cost / pushback → done when.*
 **Problem.** Configs that ping fine or show 12 Mbps don't load YouTube. Some load YouTube but not Instagram, Google Search or Telegram. Ranking by speed promoted exactly those configs and replaced a slower one that worked.
 
 **Plan.**
-- [ ] **A per-site connectivity matrix.** For each candidate that passes liveness, run small *real* requests, reading at most ~32 KB each:
+- [x] **A per-site connectivity matrix.** For each candidate that passes liveness, run small *real* requests, reading at most ~32 KB each:
   - YouTube: `www.youtube.com/generate_204`, plus the first bytes of the real page (already done).
   - Google: `www.google.com/search?q=test` (often blocked differently from YouTube).
   - Instagram: `www.instagram.com/` (header + first chunk).
   - Telegram: `web.telegram.org/` and a raw TCP connect to a Telegram data centre (149.154.167.51:443) through the proxy, since the Telegram app doesn't speak HTTPS to the web.
   - Store the result as site chips per config (`YT ✓ G ✓ IG ✗ TG ✓`) and weight it into the score.
   - **Configurable "must work" sites:** e.g. a config must pass YouTube + Google to enter the active set.
-- [ ] **A sustained test, not a burst.** Stream for ~3–5 s and record time-to-first-byte, stalls and throughput variance. A config that starts at 12 Mbps and stalls after 300 KB scores low.
-- [ ] **Repeat, don't trust a single run.** All metrics become EWMAs over many checks (see the scoring engine).
+- [x] **A sustained test, not a burst.** Stream for ~3–5 s and record time-to-first-byte, stalls and throughput variance. A config that starts at 12 Mbps and stalls after 300 KB scores low.
+- [x] **Repeat, don't trust a single run.** All metrics become EWMAs over many checks (see the scoring engine).
 - [ ] **(later) Site-aware routing.** Route `youtube.com`/`googlevideo.com` via the config best at YouTube and `instagram.com`/`cdninstagram.com` via the best at Instagram. Xray supports this with domain rules → separate balancers. This is how "works for YT but not IG" turns from a bug into a feature.
 
 **Pushback / cost.**
@@ -78,20 +82,20 @@ The engine and the matrix above address all four:
 - [ ] Add a **"reported broken"** button per config: one click demotes it hard, and the reason is logged.
 
 **False negatives** (working configs we throw away). These are probably large today:
-- [ ] **One shot, 6 s timeout:** Iranian RTT spikes beyond that are common. → retry failures once with a 12 s timeout.
-- [ ] **192 parallel handshakes from one IP** may trigger ISP rate-limiting or packet loss, which makes *good* configs fail. → lower parallelism (64) with the trickle-explore design. **Measure** before and after.
-- [ ] **6 h dead TTL is a cliff.** → exponential backoff instead: retry after 30 min, 2 h, 6 h, 24 h.
-- [ ] **800-candidate cap:** most of the ~6,000 unique configs are never tested at all. → trickle exploration eventually covers everything.
-- [ ] **Measure it:** each hour, re-test a random sample of 30 "dead" configs with relaxed settings. The revival rate is our false-negative estimate; show it in the dashboard.
+- [x] **One shot, 6 s timeout:** Iranian RTT spikes beyond that are common. → retry failures once with a 12 s timeout.
+- [ ] **192 parallel handshakes from one IP** *(now 64; still to be measured from Iran)* may trigger ISP rate-limiting or packet loss, which makes *good* configs fail. → lower parallelism (64) with the trickle-explore design. **Measure** before and after.
+- [x] **6 h dead TTL is a cliff.** → exponential backoff instead: retry after 30 min, 2 h, 6 h, 24 h.
+- [x] **800-candidate cap:** most of the ~6,000 unique configs are never tested at all. → trickle exploration eventually covers everything.
+- [x] **Measure it:** each hour, re-test a random sample of 30 "dead" configs with relaxed settings. The revival rate is our false-negative estimate; show it in the dashboard.
 
 ---
 
 ## P1 · Panel features
 
-- [ ] **Paste configs by hand.** A text area in the dashboard accepts one or many share links (or a base64 subscription). They're parsed, validated with `xray -test`, tested at once, and stored as `manual`. Manual configs are never auto-deleted, only marked failing.
-- [ ] **Per-config Test button.** Runs the full matrix on that config now, and shows the site chips plus latency and throughput live in the row.
-- [ ] **"Test all" button.** Runs the matrix over the whole pool with the budget limits above, and shows a progress bar.
-- [ ] **Site chips column** in the configs table, and a filter like "only configs that load Instagram".
+- [x] **Paste configs by hand.** A text area in the dashboard accepts one or many share links (or a base64 subscription). They're parsed, validated with `xray -test`, tested at once, and stored as `manual`. Manual configs are never auto-deleted, only marked failing.
+- [x] **Per-config Test button.** Runs the full matrix on that config now, and shows the site chips plus latency and throughput live in the row.
+- [x] **"Test all" button.** Runs the matrix over the whole pool with the budget limits above, and shows a progress bar.
+- [ ] **Site chips column** in the configs table *(done; sortable)*, and a filter like "only configs that load Instagram".
 
 ---
 
@@ -106,8 +110,8 @@ Likely causes, in order:
 4. **Third-party firewall or antivirus** (ESET, Kaspersky, Norton…) blocking it even when Windows Firewall allows it.
 
 **Plan.**
-- [ ] **Show every LAN address** in the Phone card, each with its own QR code, and label the adapter (Wi-Fi / Ethernet / virtual).
-- [ ] **Self-test page:** opening `http://<ip>:8765/ping` on the phone shows "✓ this phone can reach Juggler". It separates "can't reach" from "reached, but no configs".
+- [x] **Show every LAN address** in the Phone card, each with its own QR code, and label the adapter (Wi-Fi / Ethernet / virtual).
+- [x] **Self-test page:** opening `http://<ip>:8765/ping` on the phone shows "✓ this phone can reach Juggler". It separates "can't reach" from "reached, but no configs".
 - [ ] **Stable link that also works on mobile data:** a **Cloudflare Tunnel** (`cloudflared`) to your own domain, e.g. `https://sub.<yourdomain>/<secret>`.
   - Free, HTTPS, the same URL whatever the PC's IP, and it works away from home.
   - Only `/sub/<secret>` is exposed; nothing else.
@@ -136,7 +140,7 @@ Likely causes, in order:
 ## P1 · Tor fallback noise
 
 - [ ] **User report:** the log still fills with `ERR …lyrebird…` lines. **Need a sample** of the exact lines and the version in use (v1.4.0 summarises `[warn]` lines, but still prints every `[err]` line).
-- [ ] **Likely fix:**
+- [x] **Likely fix:**
   - Treat lyrebird/PT `[err]` lines like warnings: count them, one summary line per Tor session.
   - Validate `bridges.txt` on save, flag bad lines (e.g. an empty `url=`), and skip them.
   - Optionally drop bridges whose domain resolves to `10.10.34.x` (Iranian DNS poisoning).
