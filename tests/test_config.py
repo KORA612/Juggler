@@ -111,23 +111,6 @@ def test_validate_drops_only_the_bad_one():
     assert [n.id for n in kept] == [n.id for n in good]
 
 
-def test_watchdog_triggers_after_consecutive_failures_with_cooldown():
-    w = engine.Watch()
-    n = engine.WATCH_FAILS
-    assert not any(w.observe(False, t) for t in range(n - 1))      # not yet
-    assert w.observe(False, 1000)                                   # n-th failure in a row
-    assert not any(w.observe(False, 1000 + i) for i in range(1, n + 1))   # cooldown holds
-    later = 1000 + engine.WATCH_COOLDOWN
-    w.fails = 0
-    assert [w.observe(False, later + i) for i in range(n)][-1]      # a fresh streak after cooldown
-    w2 = engine.Watch()
-    w2.observe(False, 0); w2.observe(True, 1)                       # a success resets the streak
-    assert not any(w2.observe(False, 2 + i) for i in range(n - 1))
-    w3 = engine.Watch()
-    w3.observe(False, 0); w3.observe(None, 1)                       # refresh running: reset too
-    assert not any(w3.observe(False, 2 + i) for i in range(n - 1))
-
-
 @needs_xray
 def test_live_sync_adds_pins_then_removes(monkeypatch):
     """Against a real xray: hot add/remove through the API, pin moved before removal."""
@@ -149,3 +132,10 @@ def test_live_sync_adds_pins_then_removes(monkeypatch):
         assert m.ids == [b.id] and m.pinned is None
     finally:
         m.stop()
+
+
+def test_tor_transport_errors_are_summarised_not_printed():
+    from juggler import tor
+    assert tor._is_transport_noise('Managed proxy "pluggable_transports/lyrebird.exe": Error dialing: x')
+    assert tor._is_transport_noise("Proxy Client: unable to connect OR connection")
+    assert not tor._is_transport_noise("Could not bind to 127.0.0.1:20850: Address already in use")

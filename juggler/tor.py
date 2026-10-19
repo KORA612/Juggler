@@ -61,6 +61,12 @@ def torrc():
     return "\n".join(lines) + "\n"
 
 
+def _is_transport_noise(msg):
+    m = msg.lower()
+    return any(k in m for k in ("managed proxy", "lyrebird", "pluggable transport", "bridge",
+                                "proxy client", "error dialing", "webtunnel", "snowflake", "meek"))
+
+
 class Tor:
     """Started on demand only: when sources can't be fetched any other way, or when
     no config works and traffic has nowhere else to go. Stopped again afterwards.
@@ -124,11 +130,14 @@ class Tor:
                 if self.progress == 100 and not self.ready.is_set():
                     self.ready.set()
                     log.ok(TAG, f"Tor ready in {time.time() - self.started_at:.0f}s" + self._warn_summary())
-            elif "[err]" in line:
-                log.error(TAG, line.split("]", 1)[-1].strip()[:200])
-            elif "[warn]" in line:
-                # Bridges failing one by one is normal; count instead of flooding the log.
-                self._warns[re.sub(r"\S*\d\S*", "#", line.split("]", 1)[-1].strip())[:90]] += 1
+            elif "[err]" in line or "[warn]" in line:
+                msg = line.split("]", 1)[-1].strip()
+                if "[err]" in line and not _is_transport_noise(msg):
+                    log.error(TAG, msg[:200])           # Tor itself is broken: say so
+                else:
+                    # Bridges and pluggable transports (lyrebird) failing one by one is
+                    # normal while Tor hunts for a working bridge: count, don't flood.
+                    self._warns[re.sub(r"\S*\d\S*", "#", msg)[:90]] += 1
         self.ready.clear()
 
     def _warn_summary(self):
@@ -136,7 +145,7 @@ class Tor:
         if not n:
             return ""
         top, _ = self._warns.most_common(1)[0]
-        return f" · {n} bridge warning(s), most common: {top}"
+        return f" · {n} bridge/transport warning(s) or error(s), most common: {top}"
 
     def is_ready(self):
         return self.ready.is_set() and self.running()
