@@ -17,6 +17,7 @@ TAG_COLORS = {
     "WEB": "\033[38;5;114m",
     "PROXY": "\033[38;5;209m",
     "SETUP": "\033[38;5;110m",
+    "CONN": "\033[38;5;80m",
 }
 LEVELS = {  # level -> (symbol, color)
     "info": ("•", "\033[38;5;250m"),

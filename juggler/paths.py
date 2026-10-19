@@ -22,6 +22,7 @@ WEB_PORT = 8765
 SOCKS_PORT = 20808
 HTTP_PORT = 20809
 TOR_HTTP_PORT = 20810   # xray http inbound that routes straight into Tor
+SELF_HTTP_PORT = 20811  # xray http inbound for Juggler's own requests (hidden from the connection log)
 TOR_SOCKS_PORT = 20850  # tor's own SocksPort
 API_PORT = 20890        # xray API (balancer info / override)
 TEST_BASE_PORT = 21000  # tester inbounds: 21000 + i

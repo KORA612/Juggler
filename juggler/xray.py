@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import links, log, procs
-from .paths import (API_PORT, HTTP_PORT, IS_WIN, RUN, SOCKS_PORT, TOR_HTTP_PORT,
+from .paths import (API_PORT, HTTP_PORT, IS_WIN, RUN, SELF_HTTP_PORT, SOCKS_PORT, TOR_HTTP_PORT,
                     TOR_SOCKS_PORT, VALID_CACHE, XRAY)
 
 TAG = "XRAY"
@@ -154,7 +154,8 @@ def build_main(nodes, whitelist, tor):
         rules.append({"ip": ips, "outboundTag": "direct"})
     routing = {"domainStrategy": "AsIs", "rules": rules}
     cfg = {
-        "log": {"loglevel": "error", "access": "none"},
+        # access "" = one line per connection on stdout; ConnLog decides whether to show it
+        "log": {"loglevel": "error", "access": ""},
         "api": {"tag": "api", "listen": f"127.0.0.1:{API_PORT}",
                 "services": ["HandlerService", "RoutingService"]},
         "inbounds": [
@@ -163,6 +164,8 @@ def build_main(nodes, whitelist, tor):
             {"tag": "http", "listen": "0.0.0.0", "port": HTTP_PORT, "protocol": "http",
              "sniffing": sniff},
             {"tag": "torhttp", "listen": "127.0.0.1", "port": TOR_HTTP_PORT, "protocol": "http"},
+            {"tag": "self", "listen": "127.0.0.1", "port": SELF_HTTP_PORT, "protocol": "http",
+             "sniffing": sniff},
         ],
         "outbounds": outbounds,
         "routing": routing,
@@ -192,6 +195,7 @@ class MainXray:
         self.tor = False
         self.lock = threading.RLock()
         self.started_at = 0
+        self.on_line = None      # callback(line) -> True if handled (connection log)
 
     # ---------- full (re)start ----------
 
@@ -259,6 +263,8 @@ class MainXray:
     def _pump(self, p):
         for line in p.stdout:
             line = line.strip()
+            if self.on_line is not None and self.on_line(line):
+                continue
             # Startup banner, [Info] and the "feature X is deprecated" nags are noise.
             if "[Error]" in line or "panic" in line or "Failed to start" in line:
                 log.warn(TAG, line.split("]", 1)[-1].strip()[-200:])

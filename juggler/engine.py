@@ -26,8 +26,8 @@ import threading
 import time
 import urllib.request
 
-from . import firewall, links, log, scoring, sources, sysproxy, tester
-from .paths import (BRIDGES_TXT, HTTP_PORT, SOCKS_PORT, SOURCES_TXT, STATE_JSON, WEB_PORT,
+from . import connlog, firewall, links, log, scoring, sources, sysproxy, tester
+from .paths import (BRIDGES_TXT, HTTP_PORT, SELF_HTTP_PORT, SOCKS_PORT, SOURCES_TXT, STATE_JSON, WEB_PORT,
                     WHITELIST_TXT, read_lines, write_lines)
 from .tor import Tor
 from .xray import MainXray, build_main, test_config, validate
@@ -124,9 +124,13 @@ class Engine:
         self._saved_at = 0
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
                       "last_fetch": 0, "report": {}, "stats": {}, "pinned": None,
-                      "dead": {}, "last_sub": None, "fn": None, "last_switch": None}
+                      "dead": {}, "last_sub": None, "fn": None, "last_switch": None,
+                      "connlog": False}
         self._ensure_files()
         self._load()
+        self.connlog = connlog.ConnLog(self._route_label)
+        self.connlog.enabled = bool(self.state.get("connlog"))
+        self.main.on_line = self.connlog.feed
 
     # ---------- persistence ----------
 
@@ -572,9 +576,20 @@ class Engine:
 
     # ---------- watch: the config in use, end to end ----------
 
+    def _route_label(self, tag):
+        n = self.pool.get(tag[5:]) if tag.startswith("node-") else None
+        return scoring.label(n) if n is not None else tag
+
+    def set_connlog(self, on):
+        self.connlog.enabled = self.state["connlog"] = bool(on)
+        log.info(TAG, "connection log on: every new connection is shown (in memory only)" if on
+                 else "connection log off")
+        self.save(force=True)
+
     def _probe(self):
-        """Real use, end to end: YouTube's 204 through our own HTTP proxy port."""
-        p = f"http://127.0.0.1:{HTTP_PORT}"
+        """Real use, end to end: YouTube's 204 through xray (its internal port, so these
+        checks stay out of the connection log)."""
+        p = f"http://127.0.0.1:{SELF_HTTP_PORT}"
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}),
                                              urllib.request.HTTPSHandler(context=tester.TLS))
         try:
@@ -788,6 +803,7 @@ class Engine:
                     "status": self.tor.status(), "progress": self.tor.progress,
                     "bridges": len(self.text_file("bridges"))},
             "safe_mode": self.state.get("safe_mode", True),
+            "connlog": {"on": self.connlog.enabled, "count": self.connlog.count},
             "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False)},
             "report": self.state.get("report", {}),
             "stats": stats,
