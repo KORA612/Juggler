@@ -8,6 +8,7 @@ Each archive holds the app, that OS's Xray / Tor / Iran geo data, the Python
 packages as wheels (CPython 3.10-3.14), and on Windows the Python installer too,
 so Install.bat works even where GitHub and PyPI are blocked.
 """
+import json
 import os
 import shutil
 import subprocess
@@ -32,7 +33,7 @@ WHEEL_PLATFORMS = {
 # pip download evaluates environment markers for *this* machine, so dependencies
 # that only apply on Windows (click -> colorama) are skipped when building on Linux.
 EXTRA_WHEELS = {"windows": ["colorama"], "linux": []}
-COMMON = ["juggler", "run.py", "requirements.txt", "README.md", "assets"]
+COMMON = ["juggler", "run.py", "requirements.txt", "README.md", "assets", "extension"]
 PER_OS = {
     "windows": ["Install.bat", "Juggler.bat", "scripts/install.ps1"],
     "linux": ["install.sh", "juggler.sh"],
@@ -138,10 +139,28 @@ def pack(plat, top):
     return out
 
 
+def pack_extension():
+    """The Chrome / Edge companion as a store-ready ZIP (manifest.json at the root)."""
+    with open(os.path.join(ROOT, "extension", "manifest.json"), encoding="utf-8") as f:
+        ext_version = json.load(f)["version"]
+    out = os.path.join(DIST, f"Juggler-chrome-extension-{ext_version}.zip")
+    src = os.path.join(ROOT, "extension")
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for root, _, files in os.walk(src):
+            for f in files:
+                full = os.path.join(root, f)
+                z.write(full, os.path.relpath(full, src))
+    return out
+
+
 def main(argv):
     fresh = "--fresh" in argv
-    targets = [a for a in argv if not a.startswith("--")] or ["windows", "linux"]
+    targets = [a for a in argv if not a.startswith("--")] or ["windows", "linux", "chrome"]
     os.makedirs(DIST, exist_ok=True)
+    if "chrome" in targets:
+        out = pack_extension()
+        say(f"{os.path.relpath(out, ROOT)}  ({os.path.getsize(out) / 1e3:.0f} KB)")
+        targets = [t for t in targets if t != "chrome"]
     for plat in targets:
         print(f"\n== {plat} ==", flush=True)
         out = pack(plat, stage(plat, fresh))

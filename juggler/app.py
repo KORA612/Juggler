@@ -16,7 +16,7 @@ def create_app(engine):
 
     @app.before_request
     def local_only():
-        if request.path == "/sub":
+        if request.path in ("/sub", "/ping"):
             return None
         if request.remote_addr not in ("127.0.0.1", "::1"):
             abort(403)
@@ -57,6 +57,29 @@ def create_app(engine):
     def pin():
         ok = engine.pin(body().get("id"))
         return jsonify(ok=ok, msg="" if ok else "node is not in the live balancer"), (200 if ok else 400)
+
+    @app.post("/api/test")
+    def test_one():
+        ok = engine.test(body().get("id", ""))
+        return jsonify(ok=ok, msg="testing…" if ok else "unknown config"), (200 if ok else 400)
+
+    @app.post("/api/test_all")
+    def test_all():
+        engine.test_all()
+        return jsonify(ok=True, msg="testing every config…")
+
+    @app.post("/api/manual")
+    def manual():
+        found, unique = engine.add_manual(body().get("text", ""))
+        if not unique:
+            return jsonify(ok=False, msg="no config links found in the pasted text"), 400
+        return jsonify(ok=True, found=found, added=unique,
+                       msg=f"{unique} config(s) added, testing now")
+
+    @app.post("/api/remove")
+    def remove():
+        ok = engine.remove(body().get("id", ""))
+        return jsonify(ok=ok), (200 if ok else 400)
 
     @app.get("/api/whitelist")
     def whitelist_get():
@@ -103,6 +126,17 @@ def create_app(engine):
 
         return Response(gen(), mimetype="text/event-stream",
                         headers={"X-Accel-Buffering": "no"})
+
+    @app.get("/ping")
+    def ping():
+        """Open on the phone: proves it can reach this PC (separates 'can't reach' from
+        'reached, but no configs')."""
+        log.info("WEB", f"phone check from {request.remote_addr}")
+        return Response("<!doctype html><meta name=viewport content='width=device-width'>"
+                        "<body style='font:20px system-ui;padding:24px;background:#0b1020;color:#e8ebf4'>"
+                        "<h2 style='color:#34d399'>✓ This device can reach Juggler</h2>"
+                        "<p>If v2rayNG still says <b>Failure</b>, wait for the first configs "
+                        "to be found, then press Update again.</p>", mimetype="text/html")
 
     @app.get("/sub")
     def sub():

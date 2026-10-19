@@ -44,7 +44,7 @@
           <circle class="ring-bg" cx="60" cy="60" r="52"/>
           <circle class="ring-fg" id="ring" cx="60" cy="60" r="52"/>
         </svg>
-        <div class="ring-label"><b id="countdown">--:--</b><span>next refresh</span></div>
+        <div class="ring-label"><b id="countdown">--:--</b><span>next source fetch</span></div>
       </div>
       <button class="btn primary" id="refresh">
         <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
@@ -78,8 +78,10 @@
       <div class="card-head">
         <h2>Working configs <span class="count" id="node-count">0</span></h2>
         <div class="head-actions">
-          <span class="hint" id="balancer-hint">Auto · lowest ping wins</span>
+          <span class="hint" id="balancer-hint">Auto · best score, sticky</span>
           <button class="btn ghost small" id="auto" hidden>Back to auto</button>
+          <button class="btn ghost small" id="add-open">+ Add configs</button>
+          <button class="btn ghost small" id="test-all">Test all</button>
         </div>
       </div>
       <div class="table-wrap"><div class="table-scroll">
@@ -88,8 +90,9 @@
             <th data-sort="rank">#</th>
             <th data-sort="country">Location</th>
             <th data-sort="proto">Protocol</th>
-            <th data-sort="ping_ms" class="num">Ping</th>
-            <th data-sort="speed_kbps" class="num">Speed</th>
+            <th data-sort="sitescore" title="Real requests through the config: YouTube, Google, Instagram, Telegram">Sites</th>
+            <th data-sort="reliability" class="num" title="Share of recent checks that passed">Health</th>
+            <th data-sort="ping_ms" class="num">Ping · speed</th>
             <th></th>
           </tr></thead>
           <tbody id="nodes"></tbody>
@@ -138,6 +141,7 @@
           <textarea id="bridges-text" spellcheck="false" placeholder="webtunnel [2001:db8::1]:443 … url=https://…"></textarea>
           <button class="btn small" id="bridges-save">Save &amp; restart Tor</button>
         </details>
+        <div class="foot-stats" id="foot-stats"></div>
       </div>
     </div>
   </section>
@@ -165,6 +169,18 @@
     <div class="modal-actions">
       <button class="btn small" id="modal-copy">Copy link</button>
       <button class="btn ghost small" id="modal-close">Close</button>
+    </div>
+  </div>
+</div>
+<div class="modal" id="add-modal" hidden>
+  <div class="modal-box wide">
+    <div class="modal-title">Add configs by hand</div>
+    <p class="note">Paste one or more config links (vless://, vmess://, trojan://, ss://, hy2://…) or a whole
+      subscription. They're tested right away and are never removed automatically.</p>
+    <textarea id="add-text" spellcheck="false" placeholder="vless://…"></textarea>
+    <div class="modal-actions">
+      <button class="btn small" id="add-save">Add &amp; test</button>
+      <button class="btn ghost small" id="add-close">Cancel</button>
     </div>
   </div>
 </div>

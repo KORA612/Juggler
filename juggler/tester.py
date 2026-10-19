@@ -1,20 +1,23 @@
-"""Node testing, built to stay fast and to not be fooled.
+"""Checking configs the way they're actually used.
 
-Stage 1   every candidate in parallel: YouTube generate_204 must answer 204.
-          This is liveness + ping. Cloudflare is deliberately not the target:
-          Workers-based configs can't reach Cloudflare and would look dead.
-Verify    survivors only, on a *fresh* connection: pull ~100 KB of the real
-          youtube.com page. Iran's DPI often lets one small request through and
-          then kills or throttles the flow; those false positives die here.
-          Exit country comes from the Cloudflare trace, with non-Cloudflare
-          fallbacks. Iranian exits are dropped.
-Stage 2   download speed for the best few only, with hard per-node and total caps.
+check(nodes, "quick")   YouTube generate_204 -> alive + latency. One retry with a
+                        longer timeout before a failure counts (Iranian RTT spikes).
+check(nodes, "full")    quick, then on a *fresh* connection: ~64 KB of the real
+                        youtube.com page (DPI often lets one small request through and
+                        kills the flow afterwards), small real requests to Google,
+                        Instagram and Telegram, and the exit country.
+check(nodes, "speed")   sustained download for a few seconds, timed from the first byte.
+
+Cloudflare is deliberately not the liveness target: Workers-based configs can't
+reach Cloudflare and would look dead.
 """
 import json
 import socket
+import ssl
+import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from . import log, procs, xray
 from .paths import RUN, TEST_BASE_PORT, XRAY
@@ -23,29 +26,47 @@ TAG = "TEST"
 YT_204 = "https://www.youtube.com/generate_204"
 YT_PAGE = "https://www.youtube.com/"
 TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+SITE_URLS = {   # site -> (url, minimum bytes of a real answer)
+    "google": ("https://www.google.com/search?q=juggler&hl=en", 4096),
+    "ig": ("https://www.instagram.com/", 4096),
+    "tg": ("https://web.telegram.org/k/", 2048),
+}
 SPEED_URLS = ("https://speed.cloudflare.com/__down?bytes={n}",
-              "https://cachefly.cachefly.net/1mb.test")  # fallback for Workers-based nodes
+              "https://cachefly.cachefly.net/10mb.test")  # fallback for Workers-based nodes
 
-PING_TIMEOUT = 6        # seconds per node
-PING_WORKERS = 192
-STAGE1_BUDGET = 40      # seconds for the whole ping stage
-VERIFY_BYTES = 100_000  # real page bytes a node must deliver
-VERIFY_TIMEOUT = 10
-VERIFY_WORKERS = 128
-VERIFY_BUDGET = 35
-SPEED_TOP = 10          # only this many get a download test
-SPEED_BYTES = 1_000_000
-SPEED_NODE_CAP = 6      # seconds per attempt; partial downloads still count
-SPEED_WORKERS = 5
-STAGE2_BUDGET = 25
+QUICK_TIMEOUT, RETRY_TIMEOUT = 6, 12          # seconds; relaxed mode uses 12 / 18
+VERIFY_BYTES, SITE_BYTES = 64_000, 16_000
+PAGE_TIMEOUT = 10
+SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # speed is 5 % of the score: cap the cost
+WORKERS = {"quick": 64, "full": 32, "speed": 4}
 PORT_BASES = (TEST_BASE_PORT, 31000, 41000)
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}  # urllib's default UA gets 403s
 
+# One TLS context for every test request. urllib's default builds a new one per
+# connection, loading the whole CA store into OpenSSL each time; at ~2,000 requests
+# per cycle that native memory piled up to ~1 GB that was never returned.
+TLS = ssl.create_default_context()
+
+_bytes = 0
+_bytes_lock = threading.Lock()
+
+
+def bytes_used():
+    """Body bytes downloaded by tests since start (for the bandwidth readout)."""
+    return _bytes
+
+
+def _count(n):
+    global _bytes
+    with _bytes_lock:
+        _bytes += n
+
 
 def _opener(port):
     proxy = f"http://127.0.0.1:{port}"
-    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                                       urllib.request.HTTPSHandler(context=TLS))
 
 
 def _wait_port(port, timeout=5):
@@ -59,10 +80,11 @@ def _wait_port(port, timeout=5):
     return False
 
 
-def _get(port, url, limit, timeout, deadline=None):
-    """-> (status, body). Raises on any network error. Stops reading at `limit`
-    bytes or at `deadline` (perf_counter) so slow trickles can't stall a worker."""
-    with _opener(port).open(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+def _get(port, url, limit, timeout, deadline=None, headers=None):
+    """-> (status, body). Raises on any network error. Stops at `limit` bytes or at
+    `deadline` (perf_counter), so a slow trickle can't stall a worker."""
+    req = urllib.request.Request(url, headers=dict(UA, **(headers or {})))
+    with _opener(port).open(req, timeout=timeout) as r:
         chunks, got = [], 0
         while got < limit:
             chunk = r.read(min(16384, limit - got))
@@ -72,27 +94,30 @@ def _get(port, url, limit, timeout, deadline=None):
             got += len(chunk)
             if deadline and time.perf_counter() > deadline:
                 break
+        _count(got)
         return r.status, b"".join(chunks)
 
 
-def _alive(port):
-    """-> ping ms, or None. Only a genuine 204 counts (a block page is a 200)."""
-    t = time.perf_counter()
-    try:
-        status, _ = _get(port, YT_204, 1024, PING_TIMEOUT)
-    except Exception:  # noqa: BLE001 - any failure means dead
-        return None
-    return int((time.perf_counter() - t) * 1000) if status == 204 else None
+def _alive(port, relaxed=False):
+    """-> latency ms or None. Only a genuine 204 counts (a block page is a 200)."""
+    for timeout in ((RETRY_TIMEOUT, 18) if relaxed else (QUICK_TIMEOUT, RETRY_TIMEOUT)):
+        t = time.perf_counter()
+        try:
+            status, _ = _get(port, YT_204, 1024, timeout)
+            if status == 204:
+                return int((time.perf_counter() - t) * 1000)
+            return None                                # answered, but not YouTube: no retry
+        except Exception:  # noqa: BLE001 - try once more with a longer timeout
+            continue
+    return None
 
 
-def _verify(port):
-    """Real use on a fresh connection: ~100 KB of youtube.com within the time cap."""
+def _page_ok(port, url, need, timeout=PAGE_TIMEOUT):
     try:
-        status, body = _get(port, YT_PAGE, VERIFY_BYTES, VERIFY_TIMEOUT,
-                            deadline=time.perf_counter() + VERIFY_TIMEOUT)
+        status, body = _get(port, url, need, timeout, deadline=time.perf_counter() + timeout)
+        return status == 200 and len(body) >= need
     except Exception:  # noqa: BLE001
         return False
-    return status == 200 and len(body) >= VERIFY_BYTES
 
 
 def _geo(port):
@@ -117,42 +142,56 @@ def _geo(port):
         return "", ""
 
 
-def _check(port):
-    """Verify stage for one node -> (passed, country, exit_ip)."""
-    if not _verify(port):
-        return False, "", ""
-    return (True, *_geo(port))
+def _quick(port, node, relaxed):
+    ms = _alive(port, relaxed)
+    return {"ok": ms is not None, "ms": ms}
+
+
+def _full(port, node, relaxed):
+    ms = _alive(port, relaxed)
+    if ms is None:
+        return {"ok": False, "ms": None}
+    sites = {"yt": _page_ok(port, YT_PAGE, VERIFY_BYTES)}
+    for site, (url, need) in SITE_URLS.items():
+        sites[site] = _page_ok(port, url, need)
+    res = {"ok": sites["yt"], "ms": ms, "sites": sites}
+    if not node.country:
+        res["country"], res["ip"] = _geo(port)
+    return res
 
 
 def _speed_once(port, url):
-    got = 0
-    t0 = time.perf_counter()
-    t_first = None
+    got, t0, t_first = 0, time.perf_counter(), None
     try:
         req = urllib.request.Request(url, headers=dict(UA, Range=f"bytes=0-{SPEED_BYTES - 1}"))
-        with _opener(port).open(req, timeout=SPEED_NODE_CAP) as r:
-            while got < SPEED_BYTES and time.perf_counter() - t0 < SPEED_NODE_CAP:
-                chunk = r.read(16384)
+        with _opener(port).open(req, timeout=8) as r:
+            while got < SPEED_BYTES:
+                chunk = r.read(32768)
                 if not chunk:
                     break
+                now = time.perf_counter()
                 if t_first is None:
-                    t_first = time.perf_counter()
+                    t_first = now
                 got += len(chunk)
+                if now - t_first > SPEED_SECONDS:
+                    break
     except Exception:  # noqa: BLE001 - keep whatever arrived
         pass
-    if t_first is None or got < 32768:
+    _count(got)
+    if t_first is None or got < 65536:
         return 0
     return int(got * 8 / 1000 / max(time.perf_counter() - t_first, 0.05))
 
 
-def _speed(port):
-    """-> kbps. Timed from the first body byte, so connection setup (already
-    measured as ping) doesn't drag it down. Falls back to a non-Cloudflare file."""
+def _speed(port, node, relaxed):
     for url in SPEED_URLS:
         kbps = _speed_once(port, url.format(n=SPEED_BYTES))
         if kbps:
-            return kbps
-    return 0
+            return {"ok": True, "kbps": kbps}
+    return {"ok": True, "kbps": 0}   # no speed reading is not a liveness failure
+
+
+KINDS = {"quick": _quick, "full": _full, "speed": _speed}
 
 
 class _Tester:
@@ -166,7 +205,7 @@ class _Tester:
     def __enter__(self):
         import os
         for base in PORT_BASES:
-            path = os.path.join(RUN, "tester.json")
+            path = os.path.join(RUN, f"tester-{threading.get_ident()}.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(xray.build_tester(self.nodes, base), f)
             self.proc = procs.spawn("xray-tester", [XRAY, "run", "-c", path])
@@ -187,81 +226,15 @@ class _Tester:
         procs.stop(self.proc)
 
 
-def _pool(fn, items, workers, budget):
-    """Run fn over items in parallel; -> {item_index: result} for those done in time."""
-    ex = ThreadPoolExecutor(workers)
-    futs = {ex.submit(fn, it): i for i, it in enumerate(items)}
-    done, _ = wait(futs, timeout=budget)
-    ex.shutdown(wait=False, cancel_futures=True)
-    return {futs[f]: f.result() for f in done}
-
-
-def run(nodes, on_stage1=None, stats=None):
-    """Tests nodes in place and returns the working ones, best first.
-    on_stage1(working_by_ping) is called as soon as they are verified.
-    `stats` (a dict) receives the per-stage counts."""
-    stats = stats if stats is not None else {}
+def check(nodes, kind="quick", relaxed=False, budget=60):
+    """-> {node.id: result}. Nodes missing from the result ran out of time (unknown,
+    not failed). Only one tester runs at a time; the engine serialises its jobs."""
     if not nodes:
-        return []
-    t0 = time.time()
+        return {}
+    fn = KINDS[kind]
     with _Tester(nodes) as tst:
-        idx = {n.id: i for i, n in enumerate(nodes)}
-        log.info(TAG, f"stage 1 · {len(nodes)} nodes → YouTube ({PING_WORKERS} at a time)")
-        pings = _pool(_alive, [tst.port(i) for i in range(len(nodes))], PING_WORKERS, STAGE1_BUDGET)
-        now = time.time()
-        answered = []
-        for i, n in enumerate(nodes):
-            n.tested_at, n.speed_kbps = now, -1
-            n.ping_ms = pings.get(i) or -1
-            if n.ping_ms > 0:
-                answered.append(n)
-        log.ok(TAG, f"stage 1 done in {time.time() - t0:.0f}s · {len(answered)} answered · "
-                    f"{len(nodes) - len(answered)} dead (-1) removed")
-
-        t1 = time.time()
-        checks = _pool(_check, [tst.port(idx[n.id]) for n in answered], VERIFY_WORKERS, VERIFY_BUDGET)
-        alive, fake, iran = [], 0, 0
-        unchecked = 0
-        for j, n in enumerate(answered):
-            if j not in checks:          # ran out of time: unknown, not fake
-                n.ping_ms, unchecked = -1, unchecked + 1
-                continue
-            passed, cc, ip = checks[j]
-            if not passed:
-                n.ping_ms, fake = -1, fake + 1
-                continue
-            n.country, n.exit_ip = cc, ip
-            if cc.upper() == "IR":
-                iran += 1
-                continue
-            alive.append(n)
-        alive.sort(key=lambda n: n.ping_ms)
-        log.ok(TAG, f"verify done in {time.time() - t1:.0f}s · {len(alive)} passed real use"
-                    + (f" · {fake} false positive(s) removed" if fake else "")
-                    + (f" · {iran} Iranian exit(s) dropped" if iran else "")
-                    + (f" · {unchecked} not checked in time" if unchecked else ""))
-        stats.update(answered=len(answered), verified=len(alive), fake=fake)
-        if on_stage1:
-            on_stage1(list(alive))
-
-        top = alive[:SPEED_TOP]
-        if top:
-            t2 = time.time()
-            log.info(TAG, f"stage 2 · speed test on top {len(top)} (≤{SPEED_BYTES // 1000} KB each)")
-            ex = ThreadPoolExecutor(SPEED_WORKERS)
-            futs = {ex.submit(_speed, tst.port(idx[n.id])): n for n in top}
-            try:
-                for f in as_completed(futs, timeout=STAGE2_BUDGET):
-                    futs[f].speed_kbps = f.result()
-            except TimeoutError:
-                log.warn(TAG, "stage 2 hit its time budget; unfinished nodes keep no speed")
-            ex.shutdown(wait=False, cancel_futures=True)
-            best = max((n.speed_kbps for n in top), default=0)
-            log.ok(TAG, f"stage 2 done in {time.time() - t2:.0f}s · best {best / 1000:.1f} Mbps")
-    alive.sort(key=rank_key)
-    return alive
-
-
-def rank_key(n):
-    """Fastest download first, then lowest ping."""
-    return (-max(n.speed_kbps, 0), n.ping_ms)
+        ex = ThreadPoolExecutor(min(WORKERS[kind], len(nodes)))
+        futs = {ex.submit(fn, tst.port(i), n, relaxed): n for i, n in enumerate(nodes)}
+        done, _ = wait(futs, timeout=budget)
+        ex.shutdown(wait=False, cancel_futures=True)
+        return {futs[f].id: f.result() for f in done}

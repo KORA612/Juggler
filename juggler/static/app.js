@@ -79,16 +79,20 @@ function renderHero() {
     eb.className = "eyebrow warn"; eb.textContent = "No route";
     $("#hero-title").textContent = "Searching for working configs…";
   }
-  chips.push(`<span class="chip indigo">balancer <b>${S.nodes.filter((x) => x.in_balancer).length}</b></span>`);
-  chips.push(`<span class="chip">refreshed <b>${ago(S.last_refresh)}</b></span>`);
+  if (n && n.sites) chips.push(`<span class="chip">${siteChips(n.sites)}</span>`);
+  chips.push(`<span class="chip indigo">loaded <b>${S.nodes.filter((x) => x.in_balancer).length}</b></span>`);
+  const sw = S.last_switch;
+  if (sw && sw.reason && Date.now() / 1000 - sw.at < 3600)
+    chips.push(`<span class="chip warn" title="${esc(sw.reason)}">switched ${ago(sw.at)}: ${esc(sw.reason.slice(0, 48))}</span>`);
+  chips.push(`<span class="chip">sources <b>${ago(S.last_refresh)}</b></span>`);
   $("#hero-chips").innerHTML = chips.join("");
   $("#subtitle").textContent = S.xray ? `socks :20808 · http :20809 · ${S.mode === "nodes" ? "online" : S.mode}` : "xray is not running";
 
-  const phases = { fetching: "Fetching sources", testing: "Testing configs", speed: "Measuring speed", starting: "Starting" };
+  const phases = { fetching: "Fetching sources", exploring: "Exploring new configs", checking: "Checking configs",
+                   testing: "Testing", speed: "Measuring speed", sampling: "Re-checking retired configs", starting: "Starting" };
   const ph = $("#phase");
   ph.textContent = phases[S.phase] || "";
   ph.classList.toggle("show", !!phases[S.phase]);
-  $("#refresh").disabled = S.phase !== "idle";
 }
 
 function renderControls() {
@@ -101,16 +105,27 @@ function renderControls() {
     : "Windows only. Point apps at 127.0.0.1:20808";
   $("#safemode").setAttribute("aria-checked", S.safe_mode);
   const st = S.stats || {};
-  const steps = [["links", "links found"], ["fresh", "new unique"], ["valid", "tested"], ["alive", "alive"], [null, "in balancer"]];
+  const steps = [["links", "links found"], ["queued", "queued"], ["pool", "in pool"], ["eligible", "working"], ["active", "loaded"]];
   $("#funnel").innerHTML = steps.map(([k, label], i) => {
-    const v = k ? st[k] ?? "–" : S.nodes.filter((x) => x.in_balancer).length;
+    const v = st[k] ?? "–";
     return `<div class="step${i >= 3 ? " final" : ""}"><b>${typeof v === "number" ? v.toLocaleString() : v}</b><span>${label}</span></div>`;
   }).join("");
 }
 
+const SITES = [["yt", "YT", "YouTube"], ["google", "G", "Google"], ["ig", "IG", "Instagram"], ["tg", "TG", "Telegram"]];
+function siteChips(sites) {
+  return `<span class="sites">${SITES.map(([k, short, long]) => {
+    const v = sites[k];
+    const cls = v === undefined ? "unk" : v >= 0.5 ? "ok" : "bad";
+    const tip = v === undefined ? `${long}: not tested yet` : `${long}: ${Math.round(v * 100)}% of recent checks`;
+    return `<span class="sc ${cls}" title="${tip}">${short}</span>`;
+  }).join("")}</span>`;
+}
+const siteScore = (n) => SITES.reduce((a, [k]) => a + (n.sites[k] ?? 0.5), 0);
+
 function sortedNodes() {
-  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1 }));
-  const k = sort.key;
+  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _sites: -siteScore(n), _health: -n.reliability }));
+  const k = { sitescore: "_sites", reliability: "_health" }[sort.key] || sort.key;
   arr.sort((a, b) => {
     let x = a[k], y = b[k];
     if (k === "speed_kbps") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
@@ -124,7 +139,7 @@ function renderNodes() {
   $("#node-count").textContent = S.nodes.length;
   $("#nodes-empty").hidden = S.nodes.length > 0;
   $("#auto").hidden = !S.pinned;
-  $("#balancer-hint").textContent = S.pinned ? "Pinned manually" : "Auto · lowest ping wins";
+  $("#balancer-hint").textContent = S.pinned ? "Pinned by you" : "Auto · best score, sticky";
   document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
   const maxPing = Math.max(1500, ...S.nodes.map((n) => n.ping_ms));
   $("#nodes").innerHTML = sortedNodes().map((n) => {
@@ -132,16 +147,21 @@ function renderNodes() {
     const sp = fmtSpeed(n.speed_kbps);
     const w = Math.max(8, 100 - (n.ping_ms / maxPing) * 100);
     const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}" data-id="${n.id}">
+    const rel = n.reliability ?? 0;
+    const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
+    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}" data-id="${n.id}">
       <td class="rank">${n.rank}</td>
-      <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
+      <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
-      <td class="num"><span class="ping">${n.ping_ms} ms<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span></td>
-      <td class="num">${sp ? `<span class="speed">${sp}</span>` : '<span class="speed na">n/a</span>'}</td>
+      <td>${siteChips(n.sites || {})}</td>
+      <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
+      <td class="num"><span class="ping">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span>
+        <small class="speed ${sp ? "" : "na"}">${sp || "speed n/a"}</small></td>
       <td><div class="acts">
-        ${n.in_balancer && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
-        <button class="mini" data-act="copy">Copy</button>
-        <button class="mini" data-act="qr">QR</button>
+        ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
+        <button class="mini" data-act="test" title="Test YouTube, Google, Instagram and Telegram now">Test</button>
+        <button class="mini" data-act="qr" title="QR code and copy link">Share</button>
+        ${n.manual ? `<button class="mini danger" data-act="remove" title="Remove this config">×</button>` : ""}
       </div></td></tr>`;
   }).join("");
 }
@@ -161,6 +181,9 @@ function renderSide() {
     starting: `Tor fallback starting… ${t.progress}%`,
     ready: "Tor fallback active",
   }[t.status] || "";
+  const st = S.stats || {};
+  const fn = st.fn ? `false negatives ~${Math.round((100 * st.fn.revived) / Math.max(st.fn.sampled, 1))}% (${st.fn.revived}/${st.fn.sampled} retired configs worked)` : "false-negative check runs hourly";
+  $("#foot-stats").innerHTML = `<span>test traffic ~${st.bandwidth_mb_h ?? 0} MB/h</span><span>${fn}</span>`;
   const rep = Object.entries(S.report || {});
   $("#sources").innerHTML = rep.length
     ? rep.map(([u, r]) => `<li><span title="${esc(u)}">${esc(u.replace(/^https?:\/\//, ""))}</span><span><span class="hint">${r.count.toLocaleString()}</span> <span class="path ${r.path}">${r.path}</span></span></li>`).join("")
@@ -170,6 +193,10 @@ function renderSide() {
 function renderPhone() {
   const ph = S.phone || {};
   const out = [];
+  const ips = (S.lan.ips || []).filter((x) => x !== S.lan.ip);
+  if (ips.length) out.push(`<div class="ps"><span>Other addresses of this PC: ${ips.map(esc).join(", ")}. Try one if the phone can't connect.</span></div>`);
+  const port = new URL(S.lan.sub).port;
+  out.push(`<div class="ps"><span>Phone check: open <b>http://${esc(S.lan.ip)}:${port}/ping</b> in the phone's browser</span></div>`);
   const ls = ph.last_sub;
   if (ls && ls.ip && !["127.0.0.1", "::1"].includes(ls.ip)) {
     out.push(ls.count
@@ -208,7 +235,7 @@ function tick() {
   if (!S) return;
   const C = 326.7;
   const left = Math.max(0, S.next_refresh - Date.now() / 1000 - (S._skew || 0));
-  const busy = S.phase !== "idle";
+  const busy = S.phase === "fetching";
   $("#countdown").textContent = busy ? "now" : `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
   const frac = busy || !S.next_refresh ? 1 : 1 - left / S.interval;
   $("#ring").style.strokeDashoffset = C * (1 - frac);
@@ -239,6 +266,17 @@ $("#safemode").onclick = async () => {
   const on = $("#safemode").getAttribute("aria-checked") !== "true";
   try { await api("/api/safemode", "POST", { on }); toast(on ? "Safe mode on" : "Safe mode off: unencrypted configs allowed from the next refresh"); poll(); } catch (e) { toast(e.message, true); }
 };
+$("#test-all").onclick = async () => {
+  try { const r = await api("/api/test_all", "POST"); toast(r.msg); } catch (e) { toast(e.message, true); }
+};
+$("#add-open").onclick = () => { $("#add-modal").hidden = false; $("#add-text").focus(); };
+$("#add-close").onclick = () => ($("#add-modal").hidden = true);
+$("#add-save").onclick = async () => {
+  try {
+    const r = await api("/api/manual", "POST", { text: $("#add-text").value });
+    toast(r.msg); $("#add-text").value = ""; $("#add-modal").hidden = true; setTimeout(poll, 6000);
+  } catch (e) { toast(e.message, true); }
+};
 $("#auto").onclick = async () => { await api("/api/pin", "POST", { id: null }); toast("Back to automatic selection"); poll(); };
 
 document.querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => {
@@ -254,6 +292,13 @@ $("#nodes").onclick = async (ev) => {
   if (!n) return;
   if (btn.dataset.act === "copy") copy(n.link, "Config copied");
   if (btn.dataset.act === "qr") openModal(`${n.flag} ${regionName(n.country)} · ${n.proto}`, n.link);
+  if (btn.dataset.act === "test") {
+    btn.classList.add("busy"); btn.textContent = "…";
+    try { await api("/api/test", "POST", { id: n.id }); toast(`Testing ${n.flag} ${regionName(n.country)}…`); setTimeout(poll, 8000); } catch (e) { toast(e.message, true); }
+  }
+  if (btn.dataset.act === "remove") {
+    try { await api("/api/remove", "POST", { id: n.id }); toast("Removed"); poll(); } catch (e) { toast(e.message, true); }
+  }
   if (btn.dataset.act === "use") {
     try { await api("/api/pin", "POST", { id: n.id }); toast(`Using ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
   }
@@ -278,7 +323,7 @@ function openModal(title, link) {
 }
 $("#modal-close").onclick = () => ($("#modal").hidden = true);
 $("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").hidden = true; };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#modal").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#modal").hidden = true; $("#add-modal").hidden = true; } });
 
 // ---------- whitelist ----------
 let WL = [];

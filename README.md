@@ -11,29 +11,31 @@ No server, no domain, no account. Clone it, double-click it, and it runs.
 Public V2Ray configs on Telegram and GitHub die within hours. Most of them don't work from your network at all. Juggler does the tedious part for you:
 
 ```
-30 Telegram channels ─┐                       ┌─ stage 1: YouTube 204 through every candidate,
- (newest posts first) │                       │           in parallel; delete every failure (-1)
-GitHub aggregators   ─┼─► parse ─► xray -test ┼─ verify:  ~100 KB of real youtube.com on a fresh
-your own URLs        ─┘                       │           connection; drop fakes and Iranian exits
-                                              └─ stage 2: speed-test the 10 best
-                                                       │
-           ┌───────────────────────────────────────────┘
-           ▼
-   live Xray balancer (top 20, health-checked, auto-failover, Tor as last resort)
+30 Telegram channels ─┐                         a scored pool that is never reset
+ (newest posts first) │                         ┌──────────────────────────────────────────────┐
+GitHub aggregators   ─┼─► parse ─► queue ─► explore │ every check updates rolling scores:          │
+your own URLs        ─┤   (every 15 min)   (90 s)   │ health · YouTube/Google/Instagram/Telegram · │
+pasted by hand       ─┘                             │ latency · speed                              │
+                                                    └───────────────┬──────────────────────────────┘
+   active configs re-checked every 75 s · the rest every 10 min     │ best 20, updated live (no restart)
+   retired only after repeated failures · retried later on backoff  ▼
+                                         xray ── the config in use is sticky; watched every 20 s,
+                                          │      switched only after two failures in a row
    ├─ SOCKS 127.0.0.1:20808 / HTTP 127.0.0.1:20809
-   ├─ Windows system proxy (one switch)
+   ├─ Windows system proxy (one switch) · Chrome/Edge extension
    └─ subscription URL for your phone (v2rayNG, Hiddify, …)
-
-                               repeats every 15 minutes
 ```
 
 ## Features
 
 - **Every protocol Xray can dial:** VLESS (REALITY / TLS, Vision), VMess, Trojan, Shadowsocks (AEAD and 2022), Hysteria2, WireGuard, SOCKS, HTTP. Transports: raw, ws, grpc, httpupgrade, xhttp, kcp.
-- **Fresh configs first.** 30 curated Telegram channels are read three pages deep (about 60 posts each, newest first). The big GitHub dumps only fill leftover slots. Configs that failed are skipped for 6 hours, so every cycle explores new ones.
-- **Hard to fool.** Liveness is a real YouTube request, not a Cloudflare ping. Cloudflare-Workers-based configs can't reach Cloudflare and would look dead. Survivors must then pull about 100 KB of youtube.com on a *separate* connection. That catches configs that pass one small request and then get killed or throttled by DPI.
-- **Fast.** About 800 configs are checked in about a minute. Only the top 10 get a download test. The balancer switches to the new nodes as soon as they're verified, without waiting for the speed tests.
-- **Ranked by download speed, then ping,** with flag emoji per exit country (they also render on Windows).
+- **Resilient by design.** There is no reset moment. Every check adds evidence to a rolling score, one failed handshake never drops a config, and a config is retired only after repeated failures over 10+ minutes. Retired configs are retried later (30 min, 2 h, 6 h, 24 h). If your own internet drops, results are discarded instead of punishing the configs.
+- **The config in use is sticky.** A working config is never swapped for a "faster" one. It changes only after two failed checks in a row (the in-use config is checked with real traffic every 20 s), and Xray is updated live, so open connections and videos keep going.
+- **Fresh configs first.** 30 curated Telegram channels are read three pages deep (about 60 posts each, newest first), and the big GitHub dumps fill the rest of the queue. New configs are explored in small batches every 90 s.
+- **Tested like real use.** Each config is checked with real requests to **YouTube, Google, Instagram and Telegram** and shows a chip for each. A config that answers one small request but can't load the real youtube.com page on a fresh connection is dropped, which catches DPI that kills connections after the first request. A failed check is retried once with a longer timeout before it counts.
+- **Measured honestly.** Every hour a sample of retired configs is re-tested with relaxed timeouts. The share that actually works (the false-negative rate) and the test bandwidth (MB/h) are shown in the dashboard.
+- **Ranked by reliability, then site coverage, then latency, then speed,** with flag emoji per exit country (they also render on Windows).
+- **Hands-on when you want it.** Paste your own configs (they're never auto-deleted), test any config with one click, or **Test all**.
 - **Never stuck when sources are blocked.** Each source is fetched **direct**, then through **Juggler's own proxy**, then through **Tor** (WebTunnel/obfs4 bridges you paste, plus built-in Snowflake/meek), then from the **last cached copy**.
 - **Direct-route whitelist.** Iranian sites (`geosite:ir`, `.ir`, `geoip:ir`) and your LAN skip the proxy. You can add domains, IPs, CIDRs or geosite categories from the dashboard.
 - **Phone support.** Your phone imports a subscription served on your Wi-Fi, with nodes renamed like `🇩🇪 DE · vless · 412ms · 3.1Mbps`.
@@ -68,6 +70,22 @@ cd Juggler
 ### No GitHub access on the new machine?
 
 GitHub downloads may be blocked. Either turn on any VPN just for the install step (the installer goes through the system proxy), or copy the `bin` folder from a machine that already has Juggler. Everything in `bin` is portable between machines with the same OS.
+
+## Chrome / Edge extension
+
+<img src="docs/extension.png" width="300" align="right" alt="Juggler extension popup">
+
+A small companion for when you only want **the browser** to go through Juggler, without touching the Windows system proxy:
+
+- One switch routes Chrome (or Edge) through Juggler. Your whitelist (`.ir`, LAN) stays direct.
+- See the config in use, switch to another one, or refresh, right from the toolbar.
+- The badge shows **ON** when routed, and **!** when Juggler isn't running.
+
+The extension can't run Xray itself (browsers only speak plain HTTP/SOCKS proxies), so **Juggler must be running** on the same PC.
+
+**Install:** open `chrome://extensions` (or `edge://extensions`) → switch on **Developer mode** → **Load unpacked** → pick the `extension` folder inside your Juggler folder. A Chrome Web Store listing would remove the Developer-mode step. The store-ready ZIP is built by `scripts/build_release.py chrome`.
+
+<br clear="right">
 
 ## Important: test from your real connection
 
@@ -125,7 +143,8 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt pytest
 Install.bat         Windows one-time installer (runs scripts/install.ps1)
 Juggler.bat         Windows launcher, the target of the shortcuts
 install.sh / juggler.sh   the same pair for Linux
-scripts/build_release.py  builds the offline release archives into dist/
+scripts/build_release.py  builds the offline release archives + extension ZIP into dist/
+extension/                Chrome / Edge companion extension (Manifest V3)
 run.py              entry point: setup → engine → Flask
 juggler/links.py    share link ⇄ Xray outbound (pure, heavily tested)
 juggler/sources.py  fetch cascade: direct → own proxy → Tor → disk cache

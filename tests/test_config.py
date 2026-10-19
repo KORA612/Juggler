@@ -50,11 +50,18 @@ def test_build_main_routes_whitelist_direct_then_balancer():
     assert cfg["routing"]["domainStrategy"] == "AsIs"  # poisoned DNS must not hit geoip:private
 
 
-def test_build_main_without_nodes_uses_tor_or_direct():
-    assert xray.build_main([], WL, tor=True)["routing"]["rules"][-1]["outboundTag"] == "tor"
-    cfg = xray.build_main([], WL, tor=False)
-    assert cfg["routing"]["rules"][-1]["outboundTag"] == "direct"
-    assert "balancers" not in cfg["routing"]
+def test_build_main_without_nodes_keeps_an_empty_balancer():
+    # configs added later through the API must have a balancer to join
+    for tor, fallback in ((True, "tor"), (False, "direct")):
+        cfg = xray.build_main([], WL, tor=tor)
+        assert cfg["routing"]["balancers"][0]["fallbackTag"] == fallback
+        assert cfg["routing"]["rules"][-1] == {"network": "tcp,udp", "balancerTag": "best"}
+
+
+def test_node_tags_are_stable_ids():
+    ns = nodes()
+    cfg = xray.build_main(ns, WL, tor=False)
+    assert [o["tag"] for o in cfg["outbounds"][:len(ns)]] == ["node-" + n.id for n in ns]
 
 
 def test_build_tester_maps_each_inbound_to_its_outbound():
@@ -82,15 +89,6 @@ def test_pick_candidates_telegram_first_then_github():
     assert len(engine.pick_candidates([t1], [gh], 2)) == 2
 
 
-def test_rank_key_speed_then_ping():
-    from juggler.tester import rank_key
-    ns = [links.parse(f"trojan://p{i}@a{i}.com:443") for i in range(3)]
-    (ns[0].speed_kbps, ns[0].ping_ms) = (-1, 100)
-    (ns[1].speed_kbps, ns[1].ping_ms) = (5000, 900)
-    (ns[2].speed_kbps, ns[2].ping_ms) = (-1, 50)
-    assert [n.id for n in sorted(ns, key=rank_key)] == [ns[1].id, ns[2].id, ns[0].id]
-
-
 needs_xray = pytest.mark.skipif(not os.path.exists(XRAY), reason="run `python -m juggler.setup` first")
 
 
@@ -113,18 +111,31 @@ def test_validate_drops_only_the_bad_one():
     assert [n.id for n in kept] == [n.id for n in good]
 
 
-def test_watchdog_triggers_after_consecutive_failures_with_cooldown():
-    w = engine.Watch()
-    n = engine.WATCH_FAILS
-    assert not any(w.observe(False, t) for t in range(n - 1))      # not yet
-    assert w.observe(False, 1000)                                   # n-th failure in a row
-    assert not any(w.observe(False, 1000 + i) for i in range(1, n + 1))   # cooldown holds
-    later = 1000 + engine.WATCH_COOLDOWN
-    w.fails = 0
-    assert [w.observe(False, later + i) for i in range(n)][-1]      # a fresh streak after cooldown
-    w2 = engine.Watch()
-    w2.observe(False, 0); w2.observe(True, 1)                       # a success resets the streak
-    assert not any(w2.observe(False, 2 + i) for i in range(n - 1))
-    w3 = engine.Watch()
-    w3.observe(False, 0); w3.observe(None, 1)                       # refresh running: reset too
-    assert not any(w3.observe(False, 2 + i) for i in range(n - 1))
+@needs_xray
+def test_live_sync_adds_pins_then_removes(monkeypatch):
+    """Against a real xray: hot add/remove through the API, pin moved before removal."""
+    ensure_dirs()
+    for k, v in (("API_PORT", 29990), ("SOCKS_PORT", 29908), ("HTTP_PORT", 29909), ("TOR_HTTP_PORT", 29910)):
+        monkeypatch.setattr(xray, k, v)
+    a, b, c = (links.parse(f"trojan://p{i}@t{i}.example.com:443") for i in range(3))
+    m = xray.MainXray()
+    try:
+        assert m.apply([a, b], [], tor=False, primary=a)
+        assert m.pinned == a.id
+        added, removed = m.sync([b, c], primary=c)
+        assert (added, removed) == (1, 1)
+        assert m.ids == [b.id, c.id] and m.pinned == c.id
+        ok, out = m._api("lso")
+        assert ok and "node-" + c.id in out and "node-" + a.id not in out
+        assert m.active_id() == c.id
+        m.sync([b], primary=None)
+        assert m.ids == [b.id] and m.pinned is None
+    finally:
+        m.stop()
+
+
+def test_tor_transport_errors_are_summarised_not_printed():
+    from juggler import tor
+    assert tor._is_transport_noise('Managed proxy "pluggable_transports/lyrebird.exe": Error dialing: x')
+    assert tor._is_transport_noise("Proxy Client: unable to connect OR connection")
+    assert not tor._is_transport_noise("Could not bind to 127.0.0.1:20850: Address already in use")
