@@ -541,8 +541,9 @@ class Engine:
             chosen, reason = scoring.choose_primary(current, ranked, manual)
             if chosen is not current:
                 changed = True
-                self.state["last_switch"] = {"at": now, "reason": reason,
-                                             "to": chosen.id if chosen else None}
+                if current is not None:                 # a real switch, not the first pick
+                    self.state["last_switch"] = {"at": now, "reason": reason,
+                                                 "to": chosen.id if chosen else None}
                 if chosen is not None:
                     log.ok(TAG, f"now using {scoring.label(chosen)} · {reason}")
                 else:
