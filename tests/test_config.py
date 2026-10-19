@@ -50,11 +50,18 @@ def test_build_main_routes_whitelist_direct_then_balancer():
     assert cfg["routing"]["domainStrategy"] == "AsIs"  # poisoned DNS must not hit geoip:private
 
 
-def test_build_main_without_nodes_uses_tor_or_direct():
-    assert xray.build_main([], WL, tor=True)["routing"]["rules"][-1]["outboundTag"] == "tor"
-    cfg = xray.build_main([], WL, tor=False)
-    assert cfg["routing"]["rules"][-1]["outboundTag"] == "direct"
-    assert "balancers" not in cfg["routing"]
+def test_build_main_without_nodes_keeps_an_empty_balancer():
+    # configs added later through the API must have a balancer to join
+    for tor, fallback in ((True, "tor"), (False, "direct")):
+        cfg = xray.build_main([], WL, tor=tor)
+        assert cfg["routing"]["balancers"][0]["fallbackTag"] == fallback
+        assert cfg["routing"]["rules"][-1] == {"network": "tcp,udp", "balancerTag": "best"}
+
+
+def test_node_tags_are_stable_ids():
+    ns = nodes()
+    cfg = xray.build_main(ns, WL, tor=False)
+    assert [o["tag"] for o in cfg["outbounds"][:len(ns)]] == ["node-" + n.id for n in ns]
 
 
 def test_build_tester_maps_each_inbound_to_its_outbound():
@@ -119,3 +126,26 @@ def test_watchdog_triggers_after_consecutive_failures_with_cooldown():
     w3 = engine.Watch()
     w3.observe(False, 0); w3.observe(None, 1)                       # refresh running: reset too
     assert not any(w3.observe(False, 2 + i) for i in range(n - 1))
+
+
+@needs_xray
+def test_live_sync_adds_pins_then_removes(monkeypatch):
+    """Against a real xray: hot add/remove through the API, pin moved before removal."""
+    ensure_dirs()
+    for k, v in (("API_PORT", 29990), ("SOCKS_PORT", 29908), ("HTTP_PORT", 29909), ("TOR_HTTP_PORT", 29910)):
+        monkeypatch.setattr(xray, k, v)
+    a, b, c = (links.parse(f"trojan://p{i}@t{i}.example.com:443") for i in range(3))
+    m = xray.MainXray()
+    try:
+        assert m.apply([a, b], [], tor=False, primary=a)
+        assert m.pinned == a.id
+        added, removed = m.sync([b, c], primary=c)
+        assert (added, removed) == (1, 1)
+        assert m.ids == [b.id, c.id] and m.pinned == c.id
+        ok, out = m._api("lso")
+        assert ok and "node-" + c.id in out and "node-" + a.id not in out
+        assert m.active_id() == c.id
+        m.sync([b], primary=None)
+        assert m.ids == [b.id] and m.pinned is None
+    finally:
+        m.stop()

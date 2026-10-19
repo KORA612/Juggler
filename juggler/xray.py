@@ -129,8 +129,14 @@ def split_whitelist(entries):
     return domains, ips
 
 
+def node_tag(node_or_id):
+    """Stable outbound tag: the same config keeps its tag across every update, so it
+    can be added, pinned and removed through the API while traffic flows."""
+    return "node-" + getattr(node_or_id, "id", node_or_id)
+
+
 def build_main(nodes, whitelist, tor):
-    tags = [f"node-{i:02d}" for i in range(len(nodes))]
+    tags = [node_tag(n) for n in nodes]
     sniff = {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True}
     outbounds = [links.to_outbound(n, t) for n, t in zip(nodes, tags)]
     outbounds += [{"tag": "direct", "protocol": "freedom"},
@@ -149,7 +155,8 @@ def build_main(nodes, whitelist, tor):
     routing = {"domainStrategy": "AsIs", "rules": rules}
     cfg = {
         "log": {"loglevel": "error", "access": "none"},
-        "api": {"tag": "api", "listen": f"127.0.0.1:{API_PORT}", "services": ["RoutingService"]},
+        "api": {"tag": "api", "listen": f"127.0.0.1:{API_PORT}",
+                "services": ["HandlerService", "RoutingService"]},
         "inbounds": [
             {"tag": "socks", "listen": "0.0.0.0", "port": SOCKS_PORT, "protocol": "socks",
              "settings": {"udp": True}, "sniffing": sniff},
@@ -160,28 +167,35 @@ def build_main(nodes, whitelist, tor):
         "outbounds": outbounds,
         "routing": routing,
     }
-    if nodes:
-        routing["balancers"] = [{"tag": "best", "selector": ["node-"], "fallbackTag": last_resort,
-                                 "strategy": {"type": "leastPing"}}]
-        rules.append({"network": "tcp,udp", "balancerTag": "best"})
-        cfg["observatory"] = {"subjectSelector": ["node-"], "probeUrl": PROBE_URL,
-                              "probeInterval": "1m", "enableConcurrency": True}
-    else:
-        rules.append({"network": "tcp,udp", "outboundTag": last_resort})
+    # Always present, even with zero configs: configs added later through the API
+    # join the balancer by tag prefix, and an empty balancer falls back to Tor/direct.
+    routing["balancers"] = [{"tag": "best", "selector": ["node-"], "fallbackTag": last_resort,
+                             "strategy": {"type": "leastPing"}}]
+    rules.append({"network": "tcp,udp", "balancerTag": "best"})
+    cfg["observatory"] = {"subjectSelector": ["node-"], "probeUrl": PROBE_URL,
+                          "probeInterval": "1m", "enableConcurrency": True}
     return cfg
 
 
 # ---------- main instance ----------
 
 class MainXray:
+    """The long-running Xray that carries traffic. Configs are added and removed
+    through its API (HandlerService) so open connections survive; a full restart
+    only happens at startup, on whitelist changes, or if the API fails."""
+
     def __init__(self):
         self.proc = None
-        self.cfg = None
-        self.tags = []
-        self.lock = threading.Lock()
+        self.ids = []            # node ids currently loaded, in order
+        self.pinned = None       # node id the balancer is pinned to
+        self.whitelist = []
+        self.tor = False
+        self.lock = threading.RLock()
         self.started_at = 0
 
-    def apply(self, nodes, whitelist, tor):
+    # ---------- full (re)start ----------
+
+    def apply(self, nodes, whitelist, tor, primary=None):
         """Validate and (re)start. On a bad config the running instance is kept."""
         cfg = build_main(nodes, whitelist, tor)
         ok, err = test_config(cfg, "main-check")
@@ -189,24 +203,58 @@ class MainXray:
             log.error(TAG, f"new config rejected, keeping the old one: {err.strip()[-300:]}")
             return False
         with self.lock:
-            if self.proc and self.proc.poll() is None and cfg == self.cfg:
-                return True
             procs.stop(self.proc)
             path = os.path.join(RUN, "main.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=1)
             self.proc = procs.spawn("xray-main", [XRAY, "run", "-c", path])
-            self.cfg = cfg
-            self.tags = [f"node-{i:02d}" for i in range(len(nodes))]
+            self.ids = [n.id for n in nodes]
+            self.whitelist, self.tor = list(whitelist), tor
+            self.pinned = None
             self.started_at = time.time()
             threading.Thread(target=self._pump, args=(self.proc,), daemon=True).start()
-        time.sleep(0.4)
+        time.sleep(0.5)
         if self.proc.poll() is not None:
             log.error(TAG, "main xray exited right after start")
             return False
-        mode = f"{len(nodes)} nodes" if nodes else ("Tor only" if tor else "direct only")
+        if primary is not None and primary.id in self.ids:
+            self.pin(primary.id)
+        mode = f"{len(nodes)} configs" if nodes else ("Tor only" if tor else "direct only")
         log.ok(TAG, f"main xray up · {mode} · socks :{SOCKS_PORT} · http :{HTTP_PORT}")
         return True
+
+    # ---------- live updates ----------
+
+    def sync(self, nodes, primary=None):
+        """Make the loaded set equal `nodes` without a restart. Order matters: a pinned
+        outbound that gets removed silently breaks routing, so: add, re-pin, remove.
+        -> (added, removed) counts; falls back to a restart if the API fails."""
+        want = {n.id: n for n in nodes}
+        with self.lock:
+            if not self.alive():
+                self.apply(nodes, self.whitelist, self.tor, primary)
+                return len(nodes), 0
+            add = [n for n in nodes if n.id not in self.ids]
+            drop = [i for i in self.ids if i not in want]
+            try:
+                if add:
+                    path = os.path.join(RUN, "add.json")
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({"outbounds": [links.to_outbound(n, node_tag(n)) for n in add]}, f)
+                    if not self._api("ado", path)[0]:
+                        raise RuntimeError("ado failed")
+                    self.ids += [n.id for n in add]
+                target = primary.id if primary is not None and primary.id in want else None
+                if target != self.pinned:
+                    self.pin(target)
+                if drop:
+                    if not self._api("rmo", *[node_tag(i) for i in drop])[0]:
+                        raise RuntimeError("rmo failed")
+                    self.ids = [i for i in self.ids if i not in drop]
+            except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
+                log.warn(TAG, f"live update failed ({e}); restarting xray instead")
+                self.apply(nodes, self.whitelist, self.tor, primary)
+            return len(add), len(drop)
 
     def _pump(self, p):
         for line in p.stdout:
@@ -222,12 +270,12 @@ class MainXray:
         # --server must precede positional args: Go's flag parser stops at the first one.
         cmd, *rest = args
         r = subprocess.run([XRAY, "api", cmd, f"--server=127.0.0.1:{API_PORT}", *rest],
-                           capture_output=True, text=True, timeout=5, creationflags=NO_WINDOW)
+                           capture_output=True, text=True, timeout=8, creationflags=NO_WINDOW)
         return r.returncode == 0, r.stdout
 
-    def active_tag(self):
-        """The outbound the balancer currently selects, or None."""
-        if not self.tags or not self.alive():
+    def active_id(self):
+        """Node id the balancer currently routes to, or None."""
+        if not self.ids or not self.alive():
             return None
         try:
             ok, out = self._api("bi", "best")
@@ -235,19 +283,26 @@ class MainXray:
             return None
         if not ok:
             return None
-        # "- Selecting Override:\n  1  node-03" (if pinned) then "- Selects:\n  1  node-02"
+        # "- Selecting Override:\n  1  node-<id>" (if pinned) then "- Selects:\n  1  node-<id>"
         for section in ("Override:", "Selects:"):
-            m = re.search(re.escape(section) + r"\s*\n\s*\d+\s+(node-\d+)", out)
+            m = re.search(re.escape(section) + r"\s*\n\s*\d+\s+node-([0-9a-f]+)", out)
             if m:
                 return m.group(1)
         return None
 
-    def pin(self, tag):
-        if tag:
-            return self._api("bo", "-b", "best", tag)[0]
-        return self._api("bo", "-b", "best", "-r")[0]
+    def pin(self, node_id):
+        """Route everything through one config (None = let the balancer choose)."""
+        with self.lock:
+            if node_id:
+                ok = self._api("bo", "-b", "best", node_tag(node_id))[0]
+            else:
+                ok = self._api("bo", "-b", "best", "-r")[0]
+            if ok:
+                self.pinned = node_id
+            return ok
 
     def stop(self):
         with self.lock:
             procs.stop(self.proc)
             self.proc = None
+            self.ids = []
