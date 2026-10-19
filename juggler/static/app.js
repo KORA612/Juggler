@@ -95,7 +95,15 @@ function renderHero() {
   ph.classList.toggle("show", !!phases[S.phase]);
 }
 
+function renderConnlog() {
+  const c = S.connlog || {};
+  const b = $("#connlog");
+  b.classList.toggle("recording", !!c.on);
+  b.textContent = c.on ? `● Recording · ${c.count.toLocaleString()} conn.` : "● Record connections";
+}
+
 function renderControls() {
+  renderConnlog();
   const sp = $("#sysproxy");
   sp.setAttribute("aria-checked", S.sysproxy.on);
   sp.disabled = !S.sysproxy.supported;
@@ -358,6 +366,11 @@ for (const which of ["sources", "bridges"]) {
 
 // ---------- live log ----------
 const logEl = $("#log");
+function logVisible(l) {
+  if (logLevel === "all") return true;
+  if (logLevel === "conn") return l.dataset.tag === "CONN";
+  return l.dataset.level === logLevel;
+}
 function addLog(e) {
   const d = document.createElement("div");
   d.className = "l";
@@ -365,7 +378,8 @@ function addLog(e) {
   const t = new Date(e.t * 1000).toLocaleTimeString([], { hour12: false });
   const sym = { ok: "✓", warn: "!", error: "✗", info: "•" }[e.level] || "•";
   d.innerHTML = `<span class="t">${t}</span><span class="tag tag-${esc(e.tag)}">${esc(e.tag)}</span><span class="s-${e.level}">${sym}</span><span>${esc(e.msg)}</span>`;
-  if (logLevel !== "all" && e.level !== logLevel) d.hidden = true;
+  d.dataset.tag = e.tag;
+  d.hidden = !logVisible(d);
   const stick = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 30;
   logEl.appendChild(d);
   while (logEl.childElementCount > 800) logEl.firstChild.remove();
@@ -385,5 +399,13 @@ $("#filters").onclick = (ev) => {
   if (!b) return;
   logLevel = b.dataset.level;
   document.querySelectorAll("#filters .pill").forEach((p) => p.classList.toggle("on", p === b));
-  logEl.querySelectorAll(".l").forEach((l) => (l.hidden = logLevel !== "all" && l.dataset.level !== logLevel));
+  logEl.querySelectorAll(".l").forEach((l) => (l.hidden = !logVisible(l)));
+};
+$("#connlog").onclick = async () => {
+  const on = !(S && S.connlog && S.connlog.on);
+  try {
+    await api("/api/connlog", "POST", { on });
+    toast(on ? "Recording connections (Connections filter shows only those)" : "Stopped recording connections");
+    poll();
+  } catch (e) { toast(e.message, true); }
 };

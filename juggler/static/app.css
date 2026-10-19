@@ -326,6 +326,8 @@ details.editor summary:hover { color: var(--text); }
 .filters { display: flex; gap: 6px; }
 .pill { font-size: 12px; padding: 4px 11px; border-radius: 999px; background: transparent; border: 1px solid var(--border); color: var(--muted); }
 .pill.on { background: var(--surface-2); color: var(--text); border-color: var(--border-strong); }
+.pill.rec { margin-left: auto; margin-right: 8px; }
+.pill.rec.recording { color: var(--red); border-color: var(--red); background: var(--red-soft); }
 .log {
   height: 300px; overflow-y: auto; background: #05080f; border-radius: 12px; border: 1px solid rgba(255, 255, 255, .06);
   padding: 12px 14px; font: 12.5px/1.65 var(--mono); color: #c9d1e3;
@@ -335,7 +337,7 @@ details.editor summary:hover { color: var(--text); }
 .log .tag { font-weight: 700; }
 .log .s-ok { color: #4ade80; } .log .s-warn { color: #fbbf24; } .log .s-error { color: #f87171; } .log .s-info { color: #64748b; }
 .tag-JUGGLER { color: #f0abfc; } .tag-SRC { color: #67e8f9; } .tag-TEST { color: #fcd34d; } .tag-XRAY { color: #a5b4fc; }
-.tag-TOR { color: #d8b4fe; } .tag-WEB { color: #86efac; } .tag-PROXY { color: #fdba74; } .tag-SETUP { color: #93c5fd; }
+.tag-TOR { color: #d8b4fe; } .tag-CONN { color: #5eead4; } .tag-WEB { color: #86efac; } .tag-PROXY { color: #fdba74; } .tag-SETUP { color: #93c5fd; }
 .log::-webkit-scrollbar, .table-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
 .log::-webkit-scrollbar-thumb { background: #1c2436; border-radius: 10px; }
 
