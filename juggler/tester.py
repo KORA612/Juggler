@@ -12,6 +12,7 @@ Stage 2   download speed for the best few only, with hard per-node and total cap
 """
 import json
 import socket
+import ssl
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait
@@ -43,9 +44,16 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
                     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}  # urllib's default UA gets 403s
 
 
+# One TLS context for every test request. urllib's default builds a new one per
+# connection, loading the whole CA store into OpenSSL each time; at ~2,000 requests
+# per cycle that native memory piled up to ~1 GB that was never returned.
+TLS = ssl.create_default_context()
+
+
 def _opener(port):
     proxy = f"http://127.0.0.1:{port}"
-    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                                       urllib.request.HTTPSHandler(context=TLS))
 
 
 def _wait_port(port, timeout=5):

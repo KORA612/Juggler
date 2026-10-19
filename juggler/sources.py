@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from . import links, log
+from .tester import TLS
 from .paths import CACHE, HTTP_PORT, TOR_HTTP_PORT
 
 TAG = "SRC"
@@ -54,10 +55,12 @@ def _opener(path):
     if path == "direct":
         # An explicit empty ProxyHandler: on Windows urllib would otherwise silently
         # pick up the system proxy (which may be us), making "direct" a lie.
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                           urllib.request.HTTPSHandler(context=TLS))
     port = HTTP_PORT if path == "proxy" else TOR_HTTP_PORT
     p = f"http://127.0.0.1:{port}"
-    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}))
+    return urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}),
+                                       urllib.request.HTTPSHandler(context=TLS))
 
 
 def _cache_file(url):

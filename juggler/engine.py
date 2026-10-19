@@ -141,7 +141,8 @@ class Engine:
     def _probe(self):
         """Real use, end to end: YouTube's 204 through our own HTTP proxy port."""
         p = f"http://127.0.0.1:{HTTP_PORT}"
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}),
+                                             urllib.request.HTTPSHandler(context=tester.TLS))
         try:
             req = urllib.request.Request(tester.YT_204, headers=tester.UA)
             with opener.open(req, timeout=10) as r:
