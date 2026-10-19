@@ -16,7 +16,7 @@ from datetime import datetime
 
 from . import links, log
 from .tester import TLS
-from .paths import CACHE, HTTP_PORT, TOR_HTTP_PORT
+from .paths import CACHE, SELF_HTTP_PORT, TOR_HTTP_PORT
 
 TAG = "SRC"
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -57,7 +57,7 @@ def _opener(path):
         # pick up the system proxy (which may be us), making "direct" a lie.
         return urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                            urllib.request.HTTPSHandler(context=TLS))
-    port = HTTP_PORT if path == "proxy" else TOR_HTTP_PORT
+    port = SELF_HTTP_PORT if path == "proxy" else TOR_HTTP_PORT
     p = f"http://127.0.0.1:{port}"
     return urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}),
                                        urllib.request.HTTPSHandler(context=TLS))

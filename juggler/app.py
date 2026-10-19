@@ -58,6 +58,11 @@ def create_app(engine):
         ok = engine.pin(body().get("id"))
         return jsonify(ok=ok, msg="" if ok else "node is not in the live balancer"), (200 if ok else 400)
 
+    @app.post("/api/connlog")
+    def connlog_toggle():
+        engine.set_connlog(bool(body().get("on")))
+        return jsonify(ok=True)
+
     @app.post("/api/test")
     def test_one():
         ok = engine.test(body().get("id", ""))

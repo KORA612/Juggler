@@ -1,4 +1,8 @@
-"""Juggler entry point: python run.py [--no-browser]"""
+"""Juggler entry point: python run.py [--no-browser] [--log-connections]
+
+--log-connections   show every new connection in the log: device → site · route
+                    (same as the "Record connections" switch in the dashboard)
+"""
 import atexit
 import signal
 import sys
@@ -40,6 +44,8 @@ def main():
     from juggler.engine import Engine, lan_ip
 
     engine = Engine()
+    if "--log-connections" in sys.argv:
+        engine.set_connlog(True)
 
     def cleanup(*_):
         engine.shutdown()
