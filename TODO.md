@@ -147,6 +147,13 @@ Likely causes, in order:
 
 ---
 
+## P1 · Monitoring
+
+- [x] **Connection log** (2026-10-19): `--log-connections` / dashboard switch; `device → site · route` lines, folded, in memory only.
+- [ ] Per-config traffic counters (bytes up/down) via xray stats API, shown in the table.
+
+---
+
 ## P2 · Distribution
 
 - [x] **Chrome / Edge extension (companion)**, see `extension/`. Done 2026-10-19:
