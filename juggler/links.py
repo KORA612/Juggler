@@ -47,6 +47,16 @@ class Node:
     country: str = ""
     exit_ip: str = ""
     tested_at: float = 0.0
+    # rolling health, see scoring.py
+    checks: int = 0
+    ok_ewma: float = 0.0
+    lat_ewma: float = 0.0
+    kbps_ewma: float = 0.0
+    sites: dict = field(default_factory=dict)
+    last_ok: float = 0.0
+    last_check: float = 0.0
+    fails: int = 0
+    manual: bool = False
 
     @property
     def flag(self):
@@ -57,6 +67,19 @@ class Node:
         d.pop("outbound")
         d["flag"] = self.flag
         return d
+
+
+PERSISTED = ("source", "first_seen", "ping_ms", "speed_kbps", "country", "exit_ip", "tested_at",
+             "checks", "ok_ewma", "lat_ewma", "kbps_ewma", "sites", "last_ok", "last_check",
+             "fails", "manual")
+
+
+def restore(node, saved):
+    """Copy persisted metrics from a state.json record back onto a freshly parsed node."""
+    for k in PERSISTED:
+        if k in saved:
+            setattr(node, k, saved[k])
+    return node
 
 
 def flag(cc):
