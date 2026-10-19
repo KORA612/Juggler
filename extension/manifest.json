@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Juggler",
   "short_name": "Juggler",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Route Chrome through your local Juggler VPN, see the active config and switch it in one click.",
   "permissions": ["proxy", "storage", "alarms"],
   "host_permissions": ["http://127.0.0.1:8765/*", "http://localhost:8765/*"],

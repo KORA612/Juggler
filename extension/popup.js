@@ -38,7 +38,7 @@ function render(S, st) {
     $("#chips").innerHTML = "";
   }
   $("#auto").hidden = !S.pinned;
-  $("#list").innerHTML = S.nodes.filter((x) => x.in_balancer).slice(0, 6).map((x) => `
+  $("#list").innerHTML = S.nodes.filter((x) => x.eligible).slice(0, 6).map((x) => `
     <li class="${x.id === S.active ? "active" : ""}" data-id="${x.id}">
       <span class="f">${x.flag}</span>
       <span class="n">${esc(region(x.country))}<small>${esc(x.proto)} · ${esc(x.net)} · ${esc(x.sec)}</small></span>
@@ -46,8 +46,7 @@ function render(S, st) {
       ${x.id === S.active ? '<span class="live">in use</span>' : '<button class="use">Use</button>'}
     </li>`).join("");
   const st2 = S.stats || {};
-  $("#stats").textContent = `${st2.alive ?? S.nodes.length} working · ${S.phase === "idle" ? "idle" : S.phase}`;
-  $("#refresh").disabled = S.phase !== "idle";
+  $("#stats").textContent = `${st2.eligible ?? S.nodes.length} working · ${S.phase === "idle" ? "idle" : S.phase}`;
 }
 
 async function update() {
