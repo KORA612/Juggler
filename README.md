@@ -35,11 +35,13 @@ pasted by hand       ─┘                             │ latency · speed    
 - **Tested like real use.** Each config is checked with real requests to **YouTube, Google, Instagram and Telegram**, and how many of them load counts toward its Health. A config that answers one small request but can't load the real youtube.com page on a fresh connection is dropped, which catches DPI that kills connections after the first request. A failed check is retried once with a longer timeout before it counts.
 - **Measured honestly.** Every hour a sample of retired configs is re-tested with relaxed timeouts. The share that actually works (the false-negative rate) and the test bandwidth (MB/h) are shown in the dashboard.
 - **Ranked by reliability, then site coverage, then latency, then speed,** with flag emoji per exit country (they also render on Windows).
-- **Hands-on when you want it.** Paste your own configs (they're never auto-deleted), test any config with one click, or **Test all**.
+- **One click to connect.** The big **Connect** button routes every Windows app through Juggler (it sets the Windows system proxy); press it again to restore your settings. A ring around it counts down to the next source fetch.
+- **Hands-on when you want it.** Paste your own configs (they're never auto-deleted). **Test** any config or **Test all** and watch each row go Queued → Testing → ✓ 612 ms or ✗. Double-click a row to use it, or remove it with ×.
+- **Site check.** Type a site (`chatgpt.com`) and every config is tried on it. Each site gets its own tab showing which configs reach it and how fast.
 - **Never stuck when sources are blocked.** Each source is fetched **direct**, then through **Juggler's own proxy**, then through **Tor** (WebTunnel/obfs4 bridges you paste, plus built-in Snowflake/meek), then from the **last cached copy**.
 - **Direct-route whitelist.** Iranian sites (`geosite:ir`, `.ir`, `geoip:ir`) and your LAN skip the proxy. You can add domains, IPs, CIDRs or geosite categories from the dashboard.
 - **Phone support.** Your phone imports a subscription served on your Wi-Fi, with nodes renamed like `🇩🇪 DE · vless · 412ms · 3.1Mbps`.
-- **Clean shutdown.** The Windows system proxy is restored on exit, on console close and after a crash. Xray and Tor never outlive the app.
+- **Clean shutdown.** The Windows system proxy is restored when you close Juggler (Ctrl+C or the window's ×). Xray and Tor never outlive the app. If Windows shuts down or Juggler is ended from Task Manager while connected, the proxy is restored the next time Juggler starts (see Troubleshooting).
 
 ## Quick start
 
@@ -96,12 +98,12 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 | Goal | How |
 |---|---|
 | Browser / any app | SOCKS5 `127.0.0.1:20808` or HTTP `127.0.0.1:20809` |
-| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy; press again to restore it) |
+| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy; press again to restore it). Juggler must run **on Windows** for this, not inside WSL. |
 | Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
-| Pick a specific node | **Use** pins it. **Back to auto** returns to automatic lowest-ping selection. |
+| Pick a specific config | **Use**, or double-click its row, pins it. **Back to auto** hands the choice back to Juggler, which keeps the current config while it works. |
 | Can a config open a site? | Working configs → **+ Check a site** → type a site (`chatgpt.com`) → Enter. Every config is tried and the site gets its own tab: ✓ with the response time or ✗ per config, reachable ones first. The last 10 sites keep their tabs (↻ checks again, × forgets). These checks don't change Health or ranking. |
-| Refresh now | **Refresh now** in the dashboard, or wait for the 15-minute timer. |
+| Fetch sources now | The **↻** next to "next fetch" under the Connect button, or wait for the 15-minute timer. |
 | See what connects where | Dashboard → Live log → **● Record connections** (or start with `--log-connections`). Every new connection shows as `device → site · route`, for example `this PC → www.instagram.com:443 · 🇩🇪 DE vless` or `→ direct (whitelist)`. The **Connections** filter shows only those lines. Repeats are folded for 60 s, and it's off by default. It's kept in memory only, never written to disk. |
 
 ## Configuration
@@ -131,6 +133,8 @@ Ports, intervals and test budgets are constants at the top of `juggler/paths.py`
 | Sources show `CACHE` | Every fetch path failed. Add working WebTunnel bridges so the Tor path can work. |
 | Tor stuck below 100% | The built-in bridges are blocked. Paste fresh WebTunnel bridges. Bridges whose domain resolves to `10.10.34.x` are DNS-poisoned and won't work. |
 | v2rayNG says "Failure" | Check the dashboard's Phone card. **"Firewall blocks phones on this Private network"** means Windows was only allowed on Public networks, so press **Allow phone access**. If it says the phone reached Juggler but there were no working configs, wait for the first test cycle. Also open the URL in the phone's browser: you should see a long block of text. Some office Wi-Fi networks block devices from reaching each other. |
+| No internet after Juggler closed or after a restart | Windows still points at Juggler's proxy (it can happen when Windows shuts down or Juggler is ended from Task Manager while connected). Start Juggler once, or turn off **Settings → Network & internet → Proxy → Use a proxy server**. |
+| Connect is greyed out | Juggler is running in WSL or on Linux. Start it on Windows (`Juggler.bat` or the Desktop shortcut); on Linux point apps at `127.0.0.1:20808`. |
 | `port 8765 busy` | Juggler is already running in another window. |
 
 ## Development

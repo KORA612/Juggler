@@ -126,7 +126,6 @@ From the 2026-10-21 log:
 
 ## P2 · Distribution
 
-- [ ] **New dashboard screenshot** (`docs/dashboard.png`) from a real run on Windows.
 - [ ] **Chrome Web Store listing**, so the extension installs without Developer mode.
 - [ ] **Android:** public/VPS subscription first, a native app later.
 - [ ] **"Start with Windows" switch** in the dashboard.
