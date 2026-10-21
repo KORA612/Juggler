@@ -289,8 +289,8 @@ function renderPhone() {
   const ls = ph.last_sub, seen = $("#phone-seen");
   if (ls && ls.ip && !["127.0.0.1", "::1"].includes(ls.ip)) {
     seen.className = "phone-seen " + (ls.count ? "good" : "warn");
-    seen.title = ls.ip;
-    seen.textContent = ls.count ? `Phone synced ${ls.count} configs ${ago(ls.at)}` : `Phone reached Juggler ${ago(ls.at)}, no working configs yet`;
+    seen.title = ls.count ? `${ls.count} configs · ${ls.ip}` : `${ls.ip} · no working configs yet`;
+    seen.textContent = ls.count ? `Phone synced ${ago(ls.at)}` : `Phone reached Juggler ${ago(ls.at)}`;
   } else {
     seen.className = "phone-seen";
     seen.title = "";
