@@ -3,6 +3,11 @@
 Feedback after two weeks of daily use (2026-10-19). **P0** = fixes the "it keeps dropping me" experience.
 Each item: *problem → plan → cost / pushback → done when.*
 
+> **v1.6.1 (2026-10-21):** connection log (device → site → route), configs switch at once instead of
+> after the running test job, Site check (one tab per site), live Test / Test all progress, Health with
+> site coverage, latest ping, Connect power button, reworked hero and phone card, × and double-click on
+> every row. Speed tests without a download no longer count as passes.
+>
 > **v1.5.0 (2026-10-19):** perpetual scored engine, per-site matrix, sticky in-use config with live xray
 > updates, outage guard, false-negative sampling, paste / Test / Test all, `/ping`, Tor noise summary,
 > Chrome/Edge extension. Items below marked [x] shipped in it.
