@@ -113,7 +113,9 @@ function renderControls() {
   const label = $("#sysproxy-label");
   label.textContent = !ok ? "System proxy" : on ? "Connected" : "Connect";
   label.classList.toggle("on", ok && on);
-  $("#sysproxy-desc").textContent = ok ? "" : "Windows only. Point apps at 127.0.0.1:20808";
+  $("#sysproxy-desc").textContent = ok ? ""
+    : S.sysproxy.wsl ? "Juggler is running in WSL. Start it on Windows (Juggler.bat) to use Connect"
+    : "Windows only. Point apps at 127.0.0.1:20808";
   const sm = $("#safemode");
   sm.setAttribute("aria-checked", S.safe_mode);
   sm.title = S.safe_mode ? "Safe mode on: configs that send traffic unencrypted are dropped. Click to turn off"

@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 
 from . import connlog, firewall, links, log, scoring, sources, sysproxy, tester
-from .paths import (BRIDGES_TXT, HTTP_PORT, SELF_HTTP_PORT, SOCKS_PORT, SOURCES_TXT, STATE_JSON, WEB_PORT,
+from .paths import (BRIDGES_TXT, HTTP_PORT, IS_WSL, SELF_HTTP_PORT, SOCKS_PORT, SOURCES_TXT, STATE_JSON, WEB_PORT,
                     WHITELIST_TXT, read_lines, write_lines)
 from .tor import Tor
 from .xray import MainXray, build_main, test_config, validate
@@ -899,7 +899,8 @@ class Engine:
                     "bridges": len(self.text_file("bridges"))},
             "safe_mode": self.state.get("safe_mode", True),
             "connlog": {"on": self.connlog.enabled, "count": self.connlog.count},
-            "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False)},
+            "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False),
+                         "wsl": IS_WSL},
             "report": self.state.get("report", {}),
             "stats": stats,
             "lan": {"ip": ip, "ips": ips, "sub": f"http://{ip}:{WEB_PORT}/sub",

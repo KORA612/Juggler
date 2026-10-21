@@ -1,8 +1,10 @@
 """Filesystem layout and platform switches."""
 import os
+import platform
 import sys
 
 IS_WIN = sys.platform == "win32"
+IS_WSL = not IS_WIN and "microsoft" in platform.release().lower()   # Linux under WSL: no Windows proxy
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN = os.path.join(ROOT, "bin")
 DATA = os.path.join(ROOT, "data")
