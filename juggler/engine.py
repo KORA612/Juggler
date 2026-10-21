@@ -767,10 +767,8 @@ class Engine:
             log.ok("WEB", f"subscription fetched by {client_ip} · {len(nodes)} configs")
         lines = []
         for n in nodes:
-            sites = "".join(k[0].upper() for k in ("yt", "google", "ig", "tg") if n.sites.get(k, 0) >= 0.5)
             sp = f" · {n.speed_kbps / 1000:.1f}Mbps" if n.speed_kbps > 0 else ""
-            lines.append(links.rename(n.link, f"{n.flag} {n.country} · {n.proto} · {n.ping_ms}ms{sp}"
-                                              + (f" · {sites}" if sites else "")))
+            lines.append(links.rename(n.link, f"{n.flag} {n.country} · {n.proto} · {n.ping_ms}ms{sp}"))
         return base64.b64encode("\n".join(lines).encode()).decode()
 
     def snapshot(self):
@@ -781,7 +779,7 @@ class Engine:
         for n in ranked + rest:
             d = n.to_dict()
             d.update(active=n.id == primary, in_balancer=n.id in loaded, eligible=n in ranked,
-                     score=round(100 * scoring.score(n)), reliability=round(100 * n.ok_ewma),
+                     score=round(100 * scoring.score(n)), health=round(100 * scoring.health(n)),
                      sites={k: round(v, 2) for k, v in n.sites.items()})
             nodes.append(d)
         now = time.time()

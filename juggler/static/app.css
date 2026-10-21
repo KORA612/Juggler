@@ -262,11 +262,10 @@ tbody tr.out td { opacity: .55; }
 .p-hysteria2 { background: rgba(56, 189, 248, .14); color: #38bdf8; }
 .p-other { background: var(--surface-2); color: var(--muted); }
 .tsec { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
-.ping { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.metric { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; white-space: nowrap; }
+.metric.na { color: var(--faint); }
 .bar { width: 34px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 3px; }
-.speed { font-weight: 600; display: block; font-size: 12px; margin-top: 2px; }
-.speed.na { color: var(--faint); font-weight: 400; }
 .acts { display: flex; gap: 4px; justify-content: flex-end; }
 .acts .mini { padding: 3px 7px; }
 .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; animation: pulse 2.4s infinite; vertical-align: middle; }
@@ -353,11 +352,6 @@ details.editor summary:hover { color: var(--text); }
 .modal-title { font-weight: 650; font-size: 15px; }
 .modal-box.wide { width: min(620px, 100%); justify-items: stretch; }
 .modal-box textarea { min-height: 180px; margin: 0; }
-.sites { display: inline-flex; gap: 3px; }
-.sc { font-size: 10.5px; font-weight: 700; padding: 1px 5px; border-radius: 5px; letter-spacing: .02em; }
-.sc.ok { color: var(--accent); background: var(--accent-soft); }
-.sc.bad { color: var(--red); background: var(--red-soft); }
-.sc.unk { color: var(--faint); background: var(--surface-2); }
 .health { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .health small { color: var(--faint); }
 .tag-manual { font-size: 10px; font-weight: 700; color: var(--indigo); background: var(--indigo-soft);

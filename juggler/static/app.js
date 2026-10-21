@@ -79,7 +79,6 @@ function renderHero() {
     eb.className = "eyebrow warn"; eb.textContent = "No route";
     $("#hero-title").textContent = "Searching for working configs…";
   }
-  if (n && n.sites) chips.push(`<span class="chip">${siteChips(n.sites)}</span>`);
   chips.push(`<span class="chip indigo">loaded <b>${S.nodes.filter((x) => x.in_balancer).length}</b></span>`);
   const sw = S.last_switch;
   if (sw && sw.reason && Date.now() / 1000 - sw.at < 3600)
@@ -120,20 +119,11 @@ function renderControls() {
   }).join("");
 }
 
-const SITES = [["yt", "YT", "YouTube"], ["google", "G", "Google"], ["ig", "IG", "Instagram"], ["tg", "TG", "Telegram"]];
-function siteChips(sites) {
-  return `<span class="sites">${SITES.map(([k, short, long]) => {
-    const v = sites[k];
-    const cls = v === undefined ? "unk" : v >= 0.5 ? "ok" : "bad";
-    const tip = v === undefined ? `${long}: not tested yet` : `${long}: ${Math.round(v * 100)}% of recent checks`;
-    return `<span class="sc ${cls}" title="${tip}">${short}</span>`;
-  }).join("")}</span>`;
-}
-const siteScore = (n) => SITES.reduce((a, [k]) => a + (n.sites[k] ?? 0.5), 0);
+const speedColor = (k) => (k >= 3000 ? "var(--accent)" : k >= 1000 ? "var(--amber)" : "var(--red)");
 
 function sortedNodes() {
-  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _sites: -siteScore(n), _health: -n.reliability }));
-  const k = { sitescore: "_sites", reliability: "_health" }[sort.key] || sort.key;
+  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _health: -n.health }));
+  const k = { health: "_health" }[sort.key] || sort.key;
   arr.sort((a, b) => {
     let x = a[k], y = b[k];
     if (k === "speed_kbps") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
@@ -150,21 +140,21 @@ function renderNodes() {
   $("#balancer-hint").textContent = S.pinned ? "Pinned by you" : "Auto · best score, sticky";
   document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
   const maxPing = Math.max(1500, ...S.nodes.map((n) => n.ping_ms));
+  const maxSpeed = Math.max(5000, ...S.nodes.map((n) => n.speed_kbps));
   $("#nodes").innerHTML = sortedNodes().map((n) => {
     const pclass = ["vless", "vmess", "trojan", "ss", "hysteria2"].includes(n.proto) ? `p-${n.proto}` : "p-other";
     const sp = fmtSpeed(n.speed_kbps);
     const w = Math.max(8, 100 - (n.ping_ms / maxPing) * 100);
     const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
-    const rel = n.reliability ?? 0;
+    const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
     return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}" data-id="${n.id}">
       <td class="rank">${n.rank}</td>
       <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
-      <td>${siteChips(n.sites || {})}</td>
       <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
-      <td class="num"><span class="ping">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span>
-        <small class="speed ${sp ? "" : "na"}">${sp || "speed n/a"}</small></td>
+      <td class="num"><span class="metric">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span></td>
+      <td class="num"><span class="metric${sp ? "" : " na"}">${sp || "–"}<span class="bar"><i style="width:${sp ? Math.max(8, (n.speed_kbps / maxSpeed) * 100) : 0}%;background:${speedColor(n.speed_kbps)}"></i></span></span></td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini" data-act="test" title="Test YouTube, Google, Instagram and Telegram now">Test</button>
