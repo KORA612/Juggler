@@ -116,16 +116,26 @@
       <!-- PHONE -->
       <div class="card phone">
         <div class="card-head"><h2>Phone</h2><span class="hint">v2rayNG / Hiddify</span></div>
-        <div class="phone-body">
+        <div class="phone-top">
           <img id="sub-qr" alt="Subscription QR code">
-          <div class="phone-info">
-            <label>Subscription URL</label>
-            <div class="copy-field" data-copy-id="sub-url"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
-            <label>LAN proxy</label>
-            <div class="copy-field"><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
-            <div class="phone-status" id="phone-status"></div>
+          <div class="phone-steps">
+            <div class="steps-title">Scan to add Juggler</div>
+            <ol class="steps">
+              <li>Open v2rayNG or Hiddify</li>
+              <li>Tap <b>+</b> and scan this code</li>
+              <li>Keep the phone on this Wi-Fi</li>
+            </ol>
+            <div class="phone-seen" id="phone-seen"></div>
           </div>
         </div>
+        <div class="phone-fields">
+          <label>Subscription URL</label>
+          <div class="copy-field"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
+          <label>LAN proxy</label>
+          <div class="copy-field"><span class="cf-tag">SOCKS</span><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
+          <div class="copy-field"><span class="cf-tag">HTTP</span><code id="lan-http">…</code><button class="mini" data-copy="lan-http">Copy</button></div>
+        </div>
+        <div class="phone-status" id="phone-status"></div>
       </div>
 
       <!-- WHITELIST -->

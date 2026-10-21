@@ -338,9 +338,29 @@ tbody tr.out td { opacity: .55; }
 .empty { color: var(--muted); text-align: center; padding: 40px 20px; }
 
 /* ---------- phone ---------- */
-.phone-body { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 16px; align-items: start; }
-.phone-body img { width: 132px; height: 132px; border-radius: 12px; background: #fff; padding: 6px; }
-.phone-info { display: grid; gap: 6px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.phone-top { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 18px; align-items: center; margin-bottom: 16px; }
+.phone-top img { width: 132px; height: 132px; border-radius: 14px; background: #fff; padding: 6px; box-shadow: 0 8px 24px -12px rgba(0, 0, 0, .5); }
+.steps-title { font-weight: 650; margin-bottom: 6px; }
+.steps { margin: 0 0 12px; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 5px; }
+.steps li { counter-increment: step; display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--muted); }
+.steps li::before {
+  content: counter(step); flex: none; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10.5px; font-weight: 700; color: var(--accent); background: var(--accent-soft); transform: translateY(-1px);
+}
+.steps b { color: var(--text); }
+.phone-seen {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted);
+  padding: 4px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border);
+}
+.phone-seen::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+.phone-seen.good { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.phone-seen.good::before { background: var(--accent); }
+.phone-seen.warn { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
+.phone-seen.warn::before { background: var(--amber); }
+.phone-fields { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr); margin-bottom: 12px; }
+.phone-fields label:not(:first-child) { margin-top: 6px; }
+.cf-tag { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: var(--faint); width: 42px; flex: none; }
+.copy-field code { margin-right: auto; }
 label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 600; }
 .copy-field {
   display: flex; align-items: center; gap: 8px; justify-content: space-between;
@@ -349,7 +369,7 @@ label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; col
 .copy-field code { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .copy-field .mini { flex: none; }
 .note { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
-.phone-status { display: grid; gap: 6px; font-size: 12.5px; }
+.phone-status { display: grid; gap: 6px; font-size: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .phone-status .ps { display: flex; gap: 8px; align-items: flex-start; }
 .phone-status .ps.good { color: var(--accent); }
 .phone-status .ps.warn { color: var(--amber); }
@@ -439,7 +459,6 @@ tbody tr.failing td { opacity: .5; }
   padding: 10px 14px; border-radius: 12px; font-size: 13px; box-shadow: var(--shadow); animation: pop .18s ease-out;
 }
 .toast.err { border-left-color: var(--red); }
-.phone .copy-field code { white-space: pre-line; word-break: break-all; }
 
 /* ---------- live test feedback ---------- */
 /* --phase (set from the clock in app.js) keeps sweeps and spinners continuous across re-renders */

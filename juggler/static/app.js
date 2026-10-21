@@ -257,7 +257,8 @@ function renderSide() {
     $("#sub-url").textContent = subUrl;
     $("#sub-qr").src = qrSrc(subUrl);
   }
-  $("#lan-socks").textContent = `SOCKS ${S.lan.socks}\nHTTP  ${S.lan.http}`;
+  $("#lan-socks").textContent = S.lan.socks;
+  $("#lan-http").textContent = S.lan.http;
   renderPhone();
   const t = S.tor;
   $("#tor-status").textContent = {
@@ -282,13 +283,15 @@ function renderPhone() {
   if (ips.length) out.push(`<div class="ps"><span>Other addresses of this PC: ${ips.map(esc).join(", ")}. Try one if the phone can't connect.</span></div>`);
   const port = new URL(S.lan.sub).port;
   out.push(`<div class="ps"><span>Phone check: open <b>http://${esc(S.lan.ip)}:${port}/ping</b> in the phone's browser</span></div>`);
-  const ls = ph.last_sub;
+  const ls = ph.last_sub, seen = $("#phone-seen");
   if (ls && ls.ip && !["127.0.0.1", "::1"].includes(ls.ip)) {
-    out.push(ls.count
-      ? `<div class="ps good">✓ Phone fetched ${ls.count} configs ${ago(ls.at)} <span>(${esc(ls.ip)})</span></div>`
-      : `<div class="ps warn">! Phone reached Juggler ${ago(ls.at)} but there were no working configs yet</div>`);
+    seen.className = "phone-seen " + (ls.count ? "good" : "warn");
+    seen.title = ls.ip;
+    seen.textContent = ls.count ? `Phone synced ${ls.count} configs ${ago(ls.at)}` : `Phone reached Juggler ${ago(ls.at)}, no working configs yet`;
   } else {
-    out.push(`<div class="ps"><span>No phone has fetched the subscription yet</span></div>`);
+    seen.className = "phone-seen";
+    seen.title = "";
+    seen.textContent = "Waiting for a phone";
   }
   const fw = ph.firewall || {};
   if (fw.supported) {
