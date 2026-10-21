@@ -358,6 +358,10 @@ details.editor summary:hover { color: var(--text); }
   padding: 1px 6px; border-radius: 5px; margin-left: 6px; vertical-align: middle; }
 tbody tr.failing td { opacity: .5; }
 .mini.danger:hover { color: var(--red); border-color: var(--red); }
+.mini.danger { color: var(--muted); }
+/* × and ? share one fixed width so arming never shifts the row */
+.mini.danger { min-width: 24px; text-align: center; }
+.mini.danger.armed { color: var(--red); background: var(--red-soft); border-color: var(--red); }
 .mini.busy { opacity: .6; pointer-events: none; }
 .foot-stats { color: var(--muted); font-size: 12px; margin-top: 10px; display: flex; gap: 12px; flex-wrap: wrap; }
 .modal-box img { width: 260px; height: 260px; background: #fff; border-radius: 14px; padding: 8px; }

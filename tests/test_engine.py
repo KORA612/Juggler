@@ -179,3 +179,14 @@ def test_finished_tests_fade_out_of_the_snapshot(eng, monkeypatch):
     eng._job_test([a.id])
     eng.tests[a.id]["at"] -= engine.TEST_SHOW_FOR + 1
     assert a.id not in eng.snapshot()["tests"]
+
+
+def test_removed_config_can_come_back_from_sources(eng, monkeypatch):
+    a, b = proven(eng, 1), proven(eng, 2)
+    eng._settle()
+    assert eng.remove(a.id)
+    assert a.id not in eng.pool and a.id not in eng.state["dead"]   # removed, not retired
+    monkeypatch.setattr(engine.sources, "fetch_all",
+                        lambda urls, **kw: ({u: [a.link] for u in urls}, {u: {"path": "direct", "count": 1} for u in urls}))
+    eng._job_fetch()
+    assert [n.id for n in eng.queue] == [a.id]

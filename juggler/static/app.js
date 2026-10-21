@@ -157,6 +157,15 @@ function renderTestAll() {
   b.innerHTML = left > 0 && all.length > 1 ? `<span class="spin"></span>Testing ${all.length - left}/${all.length}` : "Test all";
 }
 
+// Removing takes a second click, so a stray click next to Share does nothing.
+// The pending state lives here because the table re-renders on every poll.
+let removeArm = { id: null, until: 0 };
+function removeBtn(n) {
+  return removeArm.id === n.id && Date.now() < removeArm.until
+    ? `<button class="mini danger armed" data-act="remove" title="Click again to remove">?</button>`
+    : `<button class="mini danger" data-act="remove" title="Remove this config">×</button>`;
+}
+
 function renderNodes() {
   renderTestAll();
   $("#node-count").textContent = S.nodes.length;
@@ -185,7 +194,7 @@ function renderNodes() {
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>
         <button class="mini" data-act="qr" title="QR code and copy link">Share</button>
-        ${n.manual ? `<button class="mini danger" data-act="remove" title="Remove this config">×</button>` : ""}
+        ${removeBtn(n)}
       </div></td></tr>`;
   }).join("");
 }
@@ -326,7 +335,14 @@ $("#nodes").onclick = async (ev) => {
     try { await api("/api/test", "POST", { id: n.id }); poll(); } catch (e) { toast(e.message, true); }
   }
   if (btn.dataset.act === "remove") {
-    try { await api("/api/remove", "POST", { id: n.id }); toast("Removed"); poll(); } catch (e) { toast(e.message, true); }
+    if (removeArm.id !== n.id || Date.now() >= removeArm.until) {
+      removeArm = { id: n.id, until: Date.now() + 3000 };
+      renderNodes();
+      setTimeout(() => { if (removeArm.id === n.id) { removeArm = { id: null, until: 0 }; renderNodes(); } }, 3000);
+      return;
+    }
+    removeArm = { id: null, until: 0 };
+    try { await api("/api/remove", "POST", { id: n.id }); toast(`Removed ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
   }
   if (btn.dataset.act === "use") {
     try { await api("/api/pin", "POST", { id: n.id }); toast(`Using ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }

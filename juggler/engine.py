@@ -694,8 +694,9 @@ class Engine:
             if self.state.get("pinned") == node_id:
                 self.state["pinned"] = None
             del self.pool[node_id]
-            if not n.manual:
-                self._retire(n, time.time())
+            # Just out of the pool, not retired: if a source still lists it, the next
+            # fetch may queue it again like any other config.
+            self.state["dead"].pop(node_id, None)
         log.info(TAG, f"removed {scoring.label(n)}")
         self._settle()
         self.save(force=True)
