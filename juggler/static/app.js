@@ -226,12 +226,9 @@ function renderNodes() {
   $("#balancer-hint").textContent = S.pinned ? "Pinned by you" : "Auto · best score, sticky";
   renderTabs();
   document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
-  const maxPing = Math.max(1500, ...S.nodes.map((n) => n.ping_ms));
-  const maxSpeed = Math.max(5000, ...S.nodes.map((n) => n.speed_kbps));
   $("#nodes").innerHTML = sortedNodes().map((n) => {
     const pclass = ["vless", "vmess", "trojan", "ss", "hysteria2"].includes(n.proto) ? `p-${n.proto}` : "p-other";
     const sp = fmtSpeed(n.speed_kbps);
-    const w = Math.max(8, 100 - (n.ping_ms / maxPing) * 100);
     const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
     const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
@@ -242,8 +239,8 @@ function renderNodes() {
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
       <td class="num c-site">${site ? siteCell(n, site) : ""}</td>
       <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
-      <td class="num c-ping"><span class="metric">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span></td>
-      <td class="num"><span class="metric${sp ? "" : " na"}">${sp || "–"}<span class="bar"><i style="width:${sp ? Math.max(8, (n.speed_kbps / maxSpeed) * 100) : 0}%;background:${speedColor(n.speed_kbps)}"></i></span></span></td>
+      <td class="num c-ping">${n.ping_ms > 0 ? `<span class="metric" style="color:${pingColor(n.ping_ms)}">${n.ping_ms} ms</span>` : '<span class="metric na">–</span>'}</td>
+      <td class="num">${sp ? `<span class="metric" style="color:${speedColor(n.speed_kbps)}">${sp}</span>` : '<span class="metric na">–</span>'}</td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>

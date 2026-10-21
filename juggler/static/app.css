@@ -328,8 +328,8 @@ tbody tr.out td { opacity: .55; }
 .p-hysteria2 { background: rgba(56, 189, 248, .14); color: #38bdf8; }
 .p-other { background: var(--surface-2); color: var(--muted); }
 .tsec { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 128px; overflow: hidden; text-overflow: ellipsis; }
-.metric { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; white-space: nowrap; }
-.metric.na { color: var(--faint); }
+.metric { font-weight: 600; white-space: nowrap; }
+.metric.na { color: var(--faint); font-weight: 400; }
 .bar { width: 34px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 3px; }
 .acts { display: flex; gap: 4px; justify-content: flex-end; }
