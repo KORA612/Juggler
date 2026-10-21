@@ -113,7 +113,9 @@ function renderControls() {
   const label = $("#sysproxy-label");
   label.textContent = !ok ? "System proxy" : on ? "Connected" : "Connect";
   label.classList.toggle("on", ok && on);
-  $("#sysproxy-desc").textContent = ok ? "" : "Windows only. Point apps at 127.0.0.1:20808";
+  $("#sysproxy-desc").textContent = ok ? ""
+    : S.sysproxy.wsl ? "Juggler is running in WSL. Start it on Windows (Juggler.bat) to use Connect"
+    : "Windows only. Point apps at 127.0.0.1:20808";
   const sm = $("#safemode");
   sm.setAttribute("aria-checked", S.safe_mode);
   sm.title = S.safe_mode ? "Safe mode on: configs that send traffic unencrypted are dropped. Click to turn off"
@@ -234,7 +236,7 @@ function renderNodes() {
     const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
     const t = testView(S.tests?.[n.id]);
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}>
+    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}${n.eligible && !n.active ? ' title="Double-click to use this config"' : ""}>
       <td class="rank">${n.rank}</td>
       <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
@@ -245,7 +247,8 @@ function renderNodes() {
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>
-        <button class="mini" data-act="qr" title="QR code and copy link">Share</button>
+        <button class="mini icon" data-act="qr" title="Share: QR code and link" aria-label="Share">
+          <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>
         ${removeBtn(n)}
       </div></td></tr>`;
   }).join("");
@@ -382,9 +385,32 @@ document.querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => {
   renderNodes();
 }));
 
+async function useConfig(n) {
+  try { await api("/api/pin", "POST", { id: n.id }); toast(`Using ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
+}
+
+// Double-click or double-tap a row = Use. Counted by hand rather than with dblclick so
+// touch screens get it too; rows re-render between taps, so the row is tracked by id.
+let lastTap = { id: null, at: 0 };
+function rowTap(ev) {
+  const tr = ev.target.closest("tr[data-id]");
+  if (!tr) return;
+  const now = Date.now(), id = tr.dataset.id;
+  const double = lastTap.id === id && now - lastTap.at < 400;
+  lastTap = double ? { id: null, at: 0 } : { id, at: now };
+  if (!double) return;
+  const n = S.nodes.find((x) => x.id === id);
+  if (!n || n.active) return;
+  if (!n.eligible) { toast("This config isn't working right now", true); return; }
+  useConfig(n);
+}
+$("#nodes").onmousedown = (ev) => {          // a double-click shouldn't select the row's text
+  if (ev.detail > 1 && !ev.target.closest("button")) ev.preventDefault();
+};
+
 $("#nodes").onclick = async (ev) => {
   const btn = ev.target.closest("button[data-act]");
-  if (!btn) return;
+  if (!btn) { rowTap(ev); return; }
   const n = S.nodes.find((x) => x.id === btn.closest("tr").dataset.id);
   if (!n) return;
   if (btn.dataset.act === "copy") copy(n.link, "Config copied");
@@ -404,9 +430,7 @@ $("#nodes").onclick = async (ev) => {
     removeArm = { id: null, until: 0 };
     try { await api("/api/remove", "POST", { id: n.id }); toast(`Removed ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
   }
-  if (btn.dataset.act === "use") {
-    try { await api("/api/pin", "POST", { id: n.id }); toast(`Using ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
-  }
+  if (btn.dataset.act === "use") useConfig(n);
 };
 
 document.addEventListener("click", async (ev) => {
