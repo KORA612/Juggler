@@ -370,3 +370,27 @@ tbody tr.failing td { opacity: .5; }
 }
 .toast.err { border-left-color: var(--red); }
 .phone .copy-field code { white-space: pre-line; word-break: break-all; }
+
+/* ---------- live test feedback ---------- */
+/* --phase (set from the clock in app.js) keeps sweeps and spinners continuous across re-renders */
+.spin {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: spin .8s linear infinite; animation-delay: var(--phase, 0ms);
+}
+.mini.testing, #test-all.testing { display: inline-flex; align-items: center; gap: 6px; color: var(--indigo); pointer-events: none; }
+.mini.testing { border-color: color-mix(in srgb, var(--indigo) 45%, transparent); }
+.mini.pass { color: var(--accent); background: var(--accent-soft); border-color: transparent; font-weight: 600; }
+.mini.fail { color: var(--red); background: var(--red-soft); border-color: transparent; font-weight: 600; }
+.mini.unknown { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
+tbody tr.testing {
+  background: linear-gradient(90deg, transparent, var(--indigo-soft), transparent) 0 0 / 50% 100% no-repeat;
+  animation: sweep 1.6s linear infinite; animation-delay: var(--phase, 0ms);
+}
+@keyframes sweep { from { background-position: -100% 0; } to { background-position: 200% 0; } }
+tbody tr.tested-ok { background: linear-gradient(90deg, var(--accent-soft), transparent 60%); }
+tbody tr.tested-ok td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+tbody tr.tested-bad { background: linear-gradient(90deg, var(--red-soft), transparent 60%); }
+tbody tr.tested-bad td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+tbody tr.testing td, tbody tr.tested-ok td, tbody tr.tested-bad td { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .spin, tbody tr.testing { animation: none; } }

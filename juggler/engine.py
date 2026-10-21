@@ -40,6 +40,7 @@ RESERVE_EVERY, RESERVE_BATCH = 10 * 60, 40
 SPEED_EVERY, SPEED_TOP = 30 * 60, 5
 SAMPLE_EVERY, SAMPLE_SIZE = 60 * 60, 30
 WATCH_EVERY = 20
+TEST_SHOW_FOR = 12       # seconds a finished dashboard test stays on its row
 POOL_MAX = 150           # scored configs kept
 ACTIVE = 20              # configs loaded into xray
 QUEUE_MAX = 6000
@@ -120,6 +121,7 @@ class Engine:
         self.primary = None                  # Node traffic is pinned to
         self.active = []                     # nodes loaded in xray
         self.due = {}                        # job -> next run (epoch)
+        self.tests = {}                      # dashboard tests: id -> {state, at, ok, ms, sites}
         self._online = (0, True)
         self._bw = []                        # (time, bytes) samples for MB/h
         self._saved_at = 0
@@ -475,14 +477,28 @@ class Engine:
 
     # dashboard-requested jobs
 
+    def _mark_tests(self, nodes, res=None, counted=True):
+        """Progress for the dashboard rows. ok=None: unknown (no answer in time, or our
+        own internet was down), which the row must not show as a failed config."""
+        now = time.time()
+        with self.lock:
+            for n in nodes:
+                if res is None:
+                    self.tests[n.id] = {"state": "running", "at": now}
+                    continue
+                r = res.get(n.id) or {}
+                self.tests[n.id] = {"state": "done", "at": now, "ok": r.get("ok") if counted else None,
+                                    "ms": r.get("ms"), "sites": r.get("sites", {}), "offline": not counted}
+
     def _job_test(self, ids):
         with self.lock:
             nodes = [self.pool[i] for i in ids if i in self.pool]
         if not nodes:
             return
         self.phase = "testing"
+        self._mark_tests(nodes)
         res = tester.check(nodes, "full", budget=60)
-        self._record(nodes, res, "manual test")
+        self._mark_tests(nodes, res, self._record(nodes, res, "manual test"))
         for n in nodes:
             r = res.get(n.id, {})
             s = " ".join(f"{k}{'✓' if v else '✗'}" for k, v in r.get("sites", {}).items())
@@ -495,8 +511,9 @@ class Engine:
         self.phase = "testing"
         for i in range(0, len(nodes), RESERVE_BATCH):
             part = nodes[i:i + RESERVE_BATCH]
+            self._mark_tests(part)
             res = tester.check(part, "full", budget=90)
-            self._record(part, res, "test all")
+            self._mark_tests(part, res, self._record(part, res, "test all"))
             self._settle()
         ok = sum(1 for n in nodes if n.fails == 0 and n.last_check)
         log.ok(TAG, f"test all · {ok}/{len(nodes)} configs working")
@@ -646,10 +663,15 @@ class Engine:
     def test(self, node_id):
         if node_id not in self.pool:
             return False
+        with self.lock:
+            self.tests[node_id] = {"state": "queued", "at": time.time()}
         self.request("test", [node_id])
         return True
 
     def test_all(self):
+        with self.lock:
+            now = time.time()
+            self.tests.update({i: {"state": "queued", "at": now} for i in self.pool})
         self.request("test_all")
         return True
 
@@ -775,6 +797,11 @@ class Engine:
         ranked, rest = self._ranked_view()
         loaded = {n.id for n in self.active}
         primary = self.primary.id if self.primary else self.main.active_id()
+        with self.lock:
+            now = time.time()
+            self.tests = {i: t for i, t in self.tests.items() if i in self.pool
+                          and (t["state"] != "done" or now - t["at"] < TEST_SHOW_FOR)}
+            tests = dict(self.tests)
         nodes = []
         for n in ranked + rest:
             d = n.to_dict()
@@ -800,6 +827,7 @@ class Engine:
             "active": primary,
             "pinned": self.state.get("pinned"),
             "last_switch": self.state.get("last_switch"),
+            "tests": tests,
             "mode": "nodes" if ranked else ("tor" if self.tor.available() else "direct"),
             "xray": self.main.alive(),
             "tor": {"installed": self.tor.available(), "ready": self.tor.is_ready(),

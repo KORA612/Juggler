@@ -133,7 +133,32 @@ function sortedNodes() {
   return arr;
 }
 
+// A test's row state. Animations restart whenever the table re-renders, so their
+// phase is pinned to the clock: a re-render mid-sweep continues where it was.
+function testView(t) {
+  const idle = { row: "", btn: "", style: "", label: "Test", title: "Test YouTube, Google, Instagram and Telegram now" };
+  if (!t) return idle;
+  const style = ` style="--phase:-${Date.now() % 1600}ms"`;
+  if (t.state === "queued") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Queued', title: "Waiting for the current check to finish" };
+  if (t.state === "running") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Testing', title: "Testing now" };
+  if (t.ok) return { row: " tested-ok", btn: " pass", style: "", label: `✓ ${t.ms} ms`, title: "Passed the real-use check" };
+  if (t.ok === false) return { row: " tested-bad", btn: " fail", style: "", label: "✗ Failed", title: "Failed the real-use check" };
+  return t.offline
+    ? { row: "", btn: " unknown", style: "", label: "! Offline", title: "Your own internet looked down, so this test was not counted" }
+    : { row: "", btn: " unknown", style: "", label: "? No answer", title: "No answer in time; not counted as a failure" };
+}
+
+const testsActive = () => Object.values(S?.tests || {}).filter((t) => t.state !== "done").length;
+
+function renderTestAll() {
+  const all = Object.values(S.tests || {}), left = testsActive();
+  const b = $("#test-all");
+  b.classList.toggle("testing", left > 0);
+  b.innerHTML = left > 0 && all.length > 1 ? `<span class="spin"></span>Testing ${all.length - left}/${all.length}` : "Test all";
+}
+
 function renderNodes() {
+  renderTestAll();
   $("#node-count").textContent = S.nodes.length;
   $("#nodes-empty").hidden = S.nodes.length > 0;
   $("#auto").hidden = !S.pinned;
@@ -148,7 +173,8 @@ function renderNodes() {
     const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
     const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}" data-id="${n.id}">
+    const t = testView(S.tests?.[n.id]);
+    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${t.row}" data-id="${n.id}"${t.style}>
       <td class="rank">${n.rank}</td>
       <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
@@ -157,7 +183,7 @@ function renderNodes() {
       <td class="num"><span class="metric${sp ? "" : " na"}">${sp || "–"}<span class="bar"><i style="width:${sp ? Math.max(8, (n.speed_kbps / maxSpeed) * 100) : 0}%;background:${speedColor(n.speed_kbps)}"></i></span></span></td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
-        <button class="mini" data-act="test" title="Test YouTube, Google, Instagram and Telegram now">Test</button>
+        <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>
         <button class="mini" data-act="qr" title="QR code and copy link">Share</button>
         ${n.manual ? `<button class="mini danger" data-act="remove" title="Remove this config">×</button>` : ""}
       </div></td></tr>`;
@@ -241,12 +267,15 @@ function tick() {
 setInterval(tick, 1000);
 
 // ---------- polling ----------
+let fastPoll = null;
 async function poll() {
   try {
     const s = await api("/api/state");
     s._skew = Date.now() / 1000 - s.now;
     S = s;
     render(); tick();
+    clearTimeout(fastPoll);
+    if (testsActive()) fastPoll = setTimeout(poll, 1000);
   } catch { $("#subtitle").textContent = "dashboard lost connection to Juggler"; $("#orb").className = "orb off"; }
 }
 poll();
@@ -265,7 +294,8 @@ $("#safemode").onclick = async () => {
   try { await api("/api/safemode", "POST", { on }); toast(on ? "Safe mode on" : "Safe mode off: unencrypted configs allowed from the next refresh"); poll(); } catch (e) { toast(e.message, true); }
 };
 $("#test-all").onclick = async () => {
-  try { const r = await api("/api/test_all", "POST"); toast(r.msg); } catch (e) { toast(e.message, true); }
+  if (testsActive()) return;
+  try { const r = await api("/api/test_all", "POST"); toast(r.msg); poll(); } catch (e) { toast(e.message, true); }
 };
 $("#add-open").onclick = () => { $("#add-modal").hidden = false; $("#add-text").focus(); };
 $("#add-close").onclick = () => ($("#add-modal").hidden = true);
@@ -291,8 +321,9 @@ $("#nodes").onclick = async (ev) => {
   if (btn.dataset.act === "copy") copy(n.link, "Config copied");
   if (btn.dataset.act === "qr") openModal(`${n.flag} ${regionName(n.country)} · ${n.proto}`, n.link);
   if (btn.dataset.act === "test") {
-    btn.classList.add("busy"); btn.textContent = "…";
-    try { await api("/api/test", "POST", { id: n.id }); toast(`Testing ${n.flag} ${regionName(n.country)}…`); setTimeout(poll, 8000); } catch (e) { toast(e.message, true); }
+    if (S.tests?.[n.id] && S.tests[n.id].state !== "done") return;
+    btn.classList.add("testing"); btn.innerHTML = '<span class="spin"></span>Queued';
+    try { await api("/api/test", "POST", { id: n.id }); poll(); } catch (e) { toast(e.message, true); }
   }
   if (btn.dataset.act === "remove") {
     try { await api("/api/remove", "POST", { id: n.id }); toast("Removed"); poll(); } catch (e) { toast(e.message, true); }

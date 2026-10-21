@@ -30,6 +30,8 @@ class FakeTor:
     def stop(self, *a): pass
     def is_ready(self): return False
     def running(self): return False
+    def status(self): return "off"
+    progress = 0
 
 
 @pytest.fixture
@@ -140,3 +142,40 @@ def test_speed_test_with_no_download_is_not_counted_as_a_passed_check(eng, monke
     monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 4200)
     eng._job_speed()
     assert a.fails == 0 and a.ok_ewma > health and a.speed_kbps == 4200
+
+
+def test_test_progress_is_visible_from_queued_to_result(eng, monkeypatch):
+    a, b = proven(eng, 1), proven(eng, 2)
+    assert eng.test(a.id)
+    assert eng.snapshot()["tests"][a.id]["state"] == "queued"
+    seen = {}
+
+    def fake_check(nodes, kind, budget):
+        seen.update({n.id: eng.snapshot()["tests"][n.id]["state"] for n in nodes})
+        return {a.id: {"ok": True, "ms": 321, "sites": {"yt": True, "ig": False}}}
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng._job_test([a.id])
+    assert seen == {a.id: "running"}
+    t = eng.snapshot()["tests"][a.id]
+    assert (t["state"], t["ok"], t["ms"], t["sites"]) == ("done", True, 321, {"yt": True, "ig": False})
+    assert b.id not in eng.snapshot()["tests"]
+
+
+def test_test_that_ran_out_of_time_or_hit_an_outage_is_not_shown_as_failed(eng, monkeypatch):
+    nodes = [proven(eng, i) for i in range(4)]
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget: {})
+    eng._job_test([nodes[0].id])
+    assert eng.snapshot()["tests"][nodes[0].id]["ok"] is None          # no answer in time: unknown
+    monkeypatch.setattr(engine.tester, "check", lambda ns, kind, budget: {n.id: {"ok": False} for n in ns})
+    monkeypatch.setattr(eng, "online", lambda: False)
+    eng._job_test_all()
+    t = eng.snapshot()["tests"][nodes[1].id]
+    assert t["state"] == "done" and t["ok"] is None and t["offline"]
+
+
+def test_finished_tests_fade_out_of_the_snapshot(eng, monkeypatch):
+    a = proven(eng, 1)
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget: {a.id: {"ok": True, "ms": 1}})
+    eng._job_test([a.id])
+    eng.tests[a.id]["at"] -= engine.TEST_SHOW_FOR + 1
+    assert a.id not in eng.snapshot()["tests"]
