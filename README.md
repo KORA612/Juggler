@@ -22,7 +22,7 @@ pasted by hand       ─┘                             │ latency · speed    
                                          xray ── the config in use is sticky; watched every 20 s,
                                           │      switched only after two failures in a row
    ├─ SOCKS 127.0.0.1:20808 / HTTP 127.0.0.1:20809
-   ├─ Windows system proxy (one switch) · Chrome/Edge extension
+   ├─ Windows system proxy (one Connect button) · Chrome/Edge extension
    └─ subscription URL for your phone (v2rayNG, Hiddify, …)
 ```
 
@@ -96,7 +96,7 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 | Goal | How |
 |---|---|
 | Browser / any app | SOCKS5 `127.0.0.1:20808` or HTTP `127.0.0.1:20809` |
-| All Windows apps | Dashboard → **System proxy** |
+| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy; press again to restore it) |
 | Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
 | Pick a specific node | **Use** pins it. **Back to auto** returns to automatic lowest-ping selection. |

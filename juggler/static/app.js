@@ -56,6 +56,7 @@ function ago(ts) {
 
 // ---------- render ----------
 function renderHero() {
+  $(".hero").classList.toggle("on", !!S.sysproxy.on);
   const n = S.nodes.find((x) => x.id === S.active) || (S.mode === "nodes" ? S.nodes.find((x) => x.in_balancer) : null);
   const orb = $("#orb");
   orb.className = "orb " + (S.mode === "nodes" ? "on" : S.mode === "tor" ? "tor" : "off");
@@ -63,7 +64,8 @@ function renderHero() {
   const chips = [];
   if (n) {
     $("#hero-flag").textContent = n.flag;
-    eb.className = "eyebrow"; eb.textContent = S.pinned ? "Connected · pinned" : "Connected";
+    // "Connected" belongs to the power button; without the system proxy the route is only ready
+    eb.className = "eyebrow"; eb.textContent = (S.sysproxy.on ? "Connected" : "Ready") + (S.pinned ? " · pinned" : "");
     $("#hero-title").textContent = `${regionName(n.country)} · ${n.proto.toUpperCase()}`;
     chips.push(`<span class="chip good">● <b>${n.ping_ms} ms</b></span>`);
     const sp = fmtSpeed(n.speed_kbps);
@@ -103,14 +105,20 @@ function renderConnlog() {
 
 function renderControls() {
   renderConnlog();
-  const sp = $("#sysproxy");
-  sp.setAttribute("aria-checked", S.sysproxy.on);
-  sp.disabled = !S.sysproxy.supported;
-  $("#ctl-sysproxy").classList.toggle("disabled", !S.sysproxy.supported);
-  $("#sysproxy-desc").textContent = S.sysproxy.supported
-    ? (S.sysproxy.on ? "Windows apps go through 127.0.0.1:20809" : "Route Windows apps through Juggler")
-    : "Windows only. Point apps at 127.0.0.1:20808";
-  $("#safemode").setAttribute("aria-checked", S.safe_mode);
+  const sp = $("#sysproxy"), on = S.sysproxy.on, ok = S.sysproxy.supported;
+  sp.setAttribute("aria-checked", on);
+  sp.disabled = !ok;
+  sp.title = !ok ? "" : on ? "Disconnect: restore the Windows proxy settings" : "Connect: route Windows apps through Juggler";
+  $("#ctl-sysproxy").classList.toggle("disabled", !ok);
+  const label = $("#sysproxy-label");
+  label.textContent = !ok ? "System proxy" : on ? "Connected" : "Connect";
+  label.classList.toggle("on", ok && on);
+  $("#sysproxy-desc").textContent = ok ? "" : "Windows only. Point apps at 127.0.0.1:20808";
+  const sm = $("#safemode");
+  sm.setAttribute("aria-checked", S.safe_mode);
+  sm.title = S.safe_mode ? "Safe mode on: configs that send traffic unencrypted are dropped. Click to turn off"
+    : "Safe mode off: unencrypted configs are allowed. Click to turn on";
+  $("#safemode-state").textContent = S.safe_mode ? "On" : "Off";
   const st = S.stats || {};
   const steps = [["links", "links found"], ["queued", "queued"], ["pool", "in pool"], ["eligible", "working"], ["active", "loaded"]];
   $("#funnel").innerHTML = steps.map(([k, label], i) => {
@@ -310,7 +318,7 @@ function render() {
 // ---------- countdown ring ----------
 function tick() {
   if (!S) return;
-  const C = 326.7;
+  const C = 351.9;                            // 2πr of the ring around the power button (r = 56)
   const left = Math.max(0, S.next_refresh - Date.now() / 1000 - (S._skew || 0));
   const busy = S.phase === "fetching";
   $("#countdown").textContent = busy ? "now" : `${String(Math.floor(left / 60)).padStart(2, "0")}:${String(Math.floor(left % 60)).padStart(2, "0")}`;
@@ -339,8 +347,13 @@ $("#refresh").onclick = async () => {
   try { const r = await api("/api/refresh", "POST"); toast(r.msg); setTimeout(poll, 400); } catch (e) { toast(e.message, true); }
 };
 $("#sysproxy").onclick = async () => {
-  const on = $("#sysproxy").getAttribute("aria-checked") !== "true";
-  try { await api("/api/sysproxy", "POST", { on }); toast(on ? "System proxy on" : "System proxy restored"); poll(); } catch (e) { toast(e.message, true); }
+  const b = $("#sysproxy");
+  if (b.classList.contains("busy")) return;
+  const on = b.getAttribute("aria-checked") !== "true";
+  b.classList.add("busy");
+  try { await api("/api/sysproxy", "POST", { on }); toast(on ? "Connected: Windows apps go through Juggler" : "Disconnected: Windows proxy restored"); await poll(); }
+  catch (e) { toast(e.message, true); }
+  finally { b.classList.remove("busy"); }
 };
 $("#safemode").onclick = async () => {
   const on = $("#safemode").getAttribute("aria-checked") !== "true";
