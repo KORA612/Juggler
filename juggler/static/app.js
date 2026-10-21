@@ -92,7 +92,10 @@ function renderHero() {
   const phases = { fetching: "Fetching sources", exploring: "Exploring new configs", checking: "Checking configs",
                    testing: "Testing", sitecheck: "Checking a site", speed: "Measuring speed", sampling: "Re-checking retired configs", starting: "Starting" };
   const ph = $("#phase");
-  ph.textContent = phases[S.phase] || "";
+  // Background work never stops, so it's a quiet spinner; hover says what it's doing.
+  // Things you start (Test, Site check, Refresh) show their progress where you clicked.
+  ph.title = phases[S.phase] || "";
+  ph.setAttribute("aria-label", ph.title);
   ph.classList.toggle("show", !!phases[S.phase]);
 }
 

@@ -107,14 +107,11 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   background: var(--surface); border: 1px solid var(--border);
 }
 .icon-btn:hover { border-color: var(--border-strong); }
-.phase {
-  display: none; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted);
-  padding: 6px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border);
-}
-.phase.show { display: inline-flex; }
+.phase { display: none; width: 36px; height: 36px; place-items: center; cursor: help; }
+.phase.show { display: inline-grid; }
 .phase::before {
-  content: ""; width: 12px; height: 12px; border-radius: 50%;
-  border: 2px solid var(--border-strong); border-top-color: var(--accent);
+  content: ""; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--muted);
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
