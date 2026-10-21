@@ -88,7 +88,7 @@ function renderHero() {
   $("#subtitle").textContent = S.xray ? `socks :20808 · http :20809 · ${S.mode === "nodes" ? "online" : S.mode}` : "xray is not running";
 
   const phases = { fetching: "Fetching sources", exploring: "Exploring new configs", checking: "Checking configs",
-                   testing: "Testing", speed: "Measuring speed", sampling: "Re-checking retired configs", starting: "Starting" };
+                   testing: "Testing", sitecheck: "Checking a site", speed: "Measuring speed", sampling: "Re-checking retired configs", starting: "Starting" };
   const ph = $("#phase");
   ph.textContent = phases[S.phase] || "";
   ph.classList.toggle("show", !!phases[S.phase]);
@@ -122,8 +122,10 @@ function renderControls() {
 const speedColor = (k) => (k >= 3000 ? "var(--accent)" : k >= 1000 ? "var(--amber)" : "var(--red)");
 
 function sortedNodes() {
-  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _health: -n.health }));
-  const k = { health: "_health" }[sort.key] || sort.key;
+  const site = selectedSite();
+  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _health: -n.health,
+    _site: site && typeof site.results[n.id] === "number" ? site.results[n.id] : Infinity }));
+  const k = { health: "_health", site: "_site" }[sort.key] || sort.key;
   arr.sort((a, b) => {
     let x = a[k], y = b[k];
     if (k === "speed_kbps") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
@@ -147,6 +149,45 @@ function testView(t) {
     ? { row: "", btn: " unknown", style: "", label: "! Offline", title: "Your own internet looked down, so this test was not counted" }
     : { row: "", btn: " unknown", style: "", label: "? No answer", title: "No answer in time; not counted as a failure" };
 }
+// ---------- site check ----------
+let siteSel = null;   // host whose results are shown as a table column
+const selectedSite = () => (S?.sitechecks || []).find((h) => h.host === siteSel) || null;
+const sitesActive = () => (S?.sitechecks || []).some((h) => h.state !== "done");
+
+function siteCell(n, site) {
+  const ms = site.results[n.id];
+  if (typeof ms === "number") return `<span class="reach ok">✓ ${ms} ms</span>`;
+  if (ms === null) return `<span class="reach bad" title="Didn't answer through this config">✗</span>`;
+  return site.state === "done" ? `<span class="reach na" title="Added after this check">–</span>`
+    : `<span class="spin reach na" style="--phase:-${Date.now() % 1600}ms"></span>`;
+}
+
+// One tab per checked site (newest first). Only re-rendered when it changes, so hover
+// and keyboard focus survive the polls.
+function renderTabs() {
+  const hist = S.sitechecks || [];
+  if (siteSel && !selectedSite()) siteSel = null;
+  const tab = (key, label, meta, x) => `<div class="tab${key === (siteSel || "") ? " sel" : ""}" role="tab" tabindex="0"
+      aria-selected="${key === (siteSel || "")}" data-tab="${esc(key)}"><span class="tab-label">${label}</span>${meta}${x}</div>`;
+  const html = [tab("", "All configs", `<span class="tab-n">${S.nodes.length}</span>`, "")].concat(hist.map((h) => {
+    const done = Object.keys(h.results).length;
+    const meta = h.state === "queued" ? '<span class="tab-n"><span class="spin"></span></span>'
+      : h.state === "running" ? `<span class="tab-n"><span class="spin"></span>${done}/${h.total}</span>`
+      : h.offline || h.interrupted ? `<span class="tab-n warn" title="${h.offline ? "Your internet was down" : "Interrupted"}">!</span>`
+      : `<span class="tab-n" title="${h.reach} of ${h.total} configs reached it">${h.reach}/${h.total}</span>`;
+    return tab(h.host, esc(h.host), meta, `<button class="tab-x" data-sact="forget" title="Forget this site" aria-label="Forget ${esc(h.host)}">×</button>`);
+  })).join("");
+  const el = $("#tabs");
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+
+  const site = selectedSite();
+  $("#node-table").classList.toggle("site-mode", !!site);
+  if (site) { $("#site-col").textContent = site.host; $("#site-col").title = site.url; }
+  const rerun = $("#site-rerun");
+  rerun.hidden = !site;
+  rerun.disabled = !!site && site.state !== "done";
+  if (site) $("#balancer-hint").textContent = site.state === "done" ? `checked ${ago(site.at)}` : "checking…";
+}
 
 const testsActive = () => Object.values(S?.tests || {}).filter((t) => t.state !== "done").length;
 
@@ -168,10 +209,12 @@ function removeBtn(n) {
 
 function renderNodes() {
   renderTestAll();
+  const site = selectedSite();
   $("#node-count").textContent = S.nodes.length;
   $("#nodes-empty").hidden = S.nodes.length > 0;
   $("#auto").hidden = !S.pinned;
   $("#balancer-hint").textContent = S.pinned ? "Pinned by you" : "Auto · best score, sticky";
+  renderTabs();
   document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
   const maxPing = Math.max(1500, ...S.nodes.map((n) => n.ping_ms));
   const maxSpeed = Math.max(5000, ...S.nodes.map((n) => n.speed_kbps));
@@ -183,12 +226,13 @@ function renderNodes() {
     const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
     const t = testView(S.tests?.[n.id]);
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${t.row}" data-id="${n.id}"${t.style}>
+    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}>
       <td class="rank">${n.rank}</td>
       <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
+      <td class="num c-site">${site ? siteCell(n, site) : ""}</td>
       <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
-      <td class="num"><span class="metric">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span></td>
+      <td class="num c-ping"><span class="metric">${n.ping_ms > 0 ? n.ping_ms + " ms" : "–"}<span class="bar"><i style="width:${w}%;background:${pingColor(n.ping_ms)}"></i></span></span></td>
       <td class="num"><span class="metric${sp ? "" : " na"}">${sp || "–"}<span class="bar"><i style="width:${sp ? Math.max(8, (n.speed_kbps / maxSpeed) * 100) : 0}%;background:${speedColor(n.speed_kbps)}"></i></span></span></td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
@@ -284,7 +328,7 @@ async function poll() {
     S = s;
     render(); tick();
     clearTimeout(fastPoll);
-    if (testsActive()) fastPoll = setTimeout(poll, 1000);
+    if (testsActive() || sitesActive()) fastPoll = setTimeout(poll, 1000);
   } catch { $("#subtitle").textContent = "dashboard lost connection to Juggler"; $("#orb").className = "orb off"; }
 }
 poll();
@@ -446,3 +490,43 @@ $("#connlog").onclick = async () => {
     poll();
   } catch (e) { toast(e.message, true); }
 };
+
+$("#site-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const v = $("#site-input").value.trim();
+  if (!v) return;
+  try {
+    const r = await api("/api/sitecheck", "POST", { url: v });
+    $("#site-input").value = "";
+    $("#site-input").blur();
+    siteSel = r.host;
+    sort = { key: "site", dir: 1 };
+    poll();
+  } catch (e) { toast(e.message, true); }
+};
+function openTab(host) {
+  siteSel = host || null;
+  sort = { key: siteSel ? "site" : "rank", dir: 1 };
+  renderNodes();
+}
+$("#tabs").onclick = async (ev) => {
+  const tab = ev.target.closest(".tab[data-tab]");
+  if (!tab) return;
+  const host = tab.dataset.tab;
+  if (ev.target.closest("[data-sact=forget]")) {
+    try { await api("/api/sitecheck", "DELETE", { host }); if (siteSel === host) openTab(null); poll(); } catch (e) { toast(e.message, true); }
+    return;
+  }
+  openTab(host);
+};
+$("#tabs").onkeydown = (ev) => {
+  const tab = ev.target.closest(".tab[data-tab]");
+  if (tab && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); openTab(tab.dataset.tab); }
+};
+$("#site-rerun").onclick = async () => {
+  const h = selectedSite();
+  if (!h) return;
+  try { await api("/api/sitecheck", "POST", { url: h.url }); poll(); } catch (e) { toast(e.message, true); }
+};
+$("#site-input").onfocus = (ev) => { ev.target.placeholder = "chatgpt.com  ↵"; };
+$("#site-input").onblur = (ev) => { ev.target.placeholder = "+ Check a site"; };

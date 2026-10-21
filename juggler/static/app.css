@@ -398,3 +398,51 @@ tbody tr.tested-bad { background: linear-gradient(90deg, var(--red-soft), transp
 tbody tr.tested-bad td:first-child { box-shadow: inset 3px 0 0 var(--red); }
 tbody tr.testing td, tbody tr.tested-ok td, tbody tr.tested-bad td { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .spin, tbody tr.testing { animation: none; } }
+
+/* ---------- tabs: all configs + one per checked site ---------- */
+.tabs {
+  display: flex; align-items: flex-end; gap: 2px; padding: 0 20px; margin-top: -2px;
+  border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab-list { display: flex; gap: 2px; }
+.tab {
+  display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; margin-bottom: -1px; cursor: pointer;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0; white-space: nowrap;
+  font-size: 13px; font-weight: 600; color: var(--muted); outline: none;
+}
+.tab:hover { color: var(--text); background: var(--surface); }
+.tab:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.tab.sel { color: var(--text); background: var(--bg-2); border-color: var(--border); box-shadow: inset 0 2px 0 var(--accent); }
+.tab-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.tab-n {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--muted); background: var(--surface-2); padding: 1px 7px; border-radius: 999px;
+}
+.tab.sel .tab-n { color: var(--accent); background: var(--accent-soft); }
+.tab-n.warn { color: var(--amber); background: var(--amber-soft); }
+.tab-n .spin { width: 8px; height: 8px; border-width: 1.5px; }
+.tab-x {
+  border: 0; background: transparent; color: var(--faint); width: 18px; height: 18px; border-radius: 5px;
+  line-height: 1; margin-right: -4px; padding: 0;
+}
+.tab-x:hover { background: var(--red-soft); color: var(--red); }
+.tab-add { flex: none; margin: 0 0 5px 6px; }
+.tab-add input {
+  width: 128px; padding: 5px 10px; font-size: 12.5px; border-radius: 8px;
+  background: transparent; border: 1px dashed var(--border-strong); transition: width .2s, border-color .2s;
+}
+.tab-add input::placeholder { color: var(--muted); }
+.tab-add input:focus { width: 200px; border-style: solid; }
+.tab-add input:focus::placeholder { color: var(--faint); }
+/* site tab: its result sits next to Protocol, Ping steps aside so nothing overflows */
+.c-site { display: none; }
+.site-mode .c-site { display: table-cell; }
+.site-mode .c-ping { display: none; }
+th.c-site { color: var(--accent); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+tbody tr.noreach td { opacity: .45; }
+tbody tr.noreach td.c-site { opacity: 1; }
+.reach { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.reach.ok { color: var(--accent); }
+.reach.bad { color: var(--red); }
+.reach.na { color: var(--faint); font-weight: 400; }

@@ -24,6 +24,7 @@ import random
 import socket
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 from . import connlog, firewall, links, log, scoring, sources, sysproxy, tester
@@ -41,6 +42,7 @@ SPEED_EVERY, SPEED_TOP = 30 * 60, 5
 SAMPLE_EVERY, SAMPLE_SIZE = 60 * 60, 30
 WATCH_EVERY = 20
 TEST_SHOW_FOR = 12       # seconds a finished dashboard test stays on its row
+SITE_HISTORY = 10        # sites checked from the dashboard, newest first
 POOL_MAX = 150           # scored configs kept
 ACTIVE = 20              # configs loaded into xray
 QUEUE_MAX = 6000
@@ -127,7 +129,7 @@ class Engine:
         self._saved_at = 0
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
                       "last_fetch": 0, "report": {}, "stats": {}, "pinned": None,
-                      "dead": {}, "last_sub": None, "fn": None, "last_switch": None,
+                      "dead": {}, "sitechecks": [], "last_sub": None, "fn": None, "last_switch": None,
                       "connlog": False}
         self._ensure_files()
         self._load()
@@ -155,6 +157,9 @@ class Engine:
         # v1.4 stored {"dead": {id: timestamp}}; now {id: {"until", "strikes", "link"}}
         self.state["dead"] = {k: (v if isinstance(v, dict) else {"until": 0, "strikes": 0})
                               for k, v in self.state.get("dead", {}).items()}
+        for h in self.state["sitechecks"]:          # a check cut short by a restart
+            if h.get("state") != "done":
+                h.update(state="done", interrupted=True)
         for d in saved.get("pool", saved.get("nodes", [])):
             n = links.parse(d.get("link", ""))
             if n:
@@ -505,6 +510,34 @@ class Engine:
             log.info(TAG, f"test {scoring.label(n)} · {'OK' if r.get('ok') else 'FAILED'}"
                           + (f" · {r.get('ms')} ms · {s}" if r.get("ok") else ""))
 
+    def _job_site_check(self, host):
+        """Can each config reach a site the user named? Informational only: it never
+        changes Health or ranking."""
+        with self.lock:
+            entry = next((h for h in self.state["sitechecks"] if h["host"] == host), None)
+            nodes = list(self.pool.values())
+            if entry is None:
+                return                                  # forgotten while it was queued
+            entry.update(state="running", total=len(nodes), results={}, offline=False)
+        self.phase = "sitecheck"
+        for i in range(0, len(nodes), RESERVE_BATCH):
+            part = nodes[i:i + RESERVE_BATCH]
+            res = tester.check(part, "site", budget=60, url=entry["url"])
+            if part and not any(r.get("ok") for r in res.values()) and len(part) >= 3 and not self.online():
+                log.warn(TAG, f"site check {host}: nothing answered and the internet itself looks down "
+                              "→ stopped, results not counted")
+                with self.lock:
+                    entry.update(state="done", offline=True, results={}, reach=0, at=time.time())
+                return
+            with self.lock:
+                entry["results"].update({n.id: res[n.id]["ms"] if res.get(n.id, {}).get("ok") else None
+                                         for n in part})
+        with self.lock:
+            reach = sum(1 for ms in entry["results"].values() if ms is not None)
+            entry.update(state="done", reach=reach, at=time.time())
+        log.info(TAG, f"site check {host} · {reach}/{len(nodes)} configs reach it")
+        self.save(force=True)
+
     def _job_test_all(self):
         with self.lock:
             nodes = list(self.pool.values())
@@ -675,6 +708,34 @@ class Engine:
         self.request("test_all")
         return True
 
+    def site_check(self, raw):
+        """Queue a reachability check of one site through every config. -> (ok, host or error)"""
+        raw = (raw or "").strip()
+        url = raw if "://" in raw else "https://" + raw
+        u = urllib.parse.urlparse(url)
+        host = (u.hostname or "").lower()
+        if u.scheme not in ("http", "https") or "." not in host or " " in raw:
+            return False, "enter a site like chatgpt.com or https://x.com/home"
+        with self.lock:
+            hist = self.state["sitechecks"]
+            old = next((h for h in hist if h["host"] == host), None)
+            if old is not None and old["state"] != "done":
+                return True, host                       # already queued or running
+            hist = [h for h in hist if h["host"] != host]
+            hist.insert(0, {"url": url, "host": host, "at": time.time(), "state": "queued",
+                            "results": {}, "total": len(self.pool), "reach": 0})
+            self.state["sitechecks"] = hist[:SITE_HISTORY]
+        self.request("site_check", host)
+        return True, host
+
+    def site_forget(self, host):
+        with self.lock:
+            hist = self.state["sitechecks"]
+            self.state["sitechecks"] = [h for h in hist if h["host"] != host]
+            found = len(hist) != len(self.state["sitechecks"])
+        self.save(force=True)
+        return found
+
     def add_manual(self, text):
         found = links.extract_links(text or "")
         nodes = {}
@@ -803,6 +864,7 @@ class Engine:
             self.tests = {i: t for i, t in self.tests.items() if i in self.pool
                           and (t["state"] != "done" or now - t["at"] < TEST_SHOW_FOR)}
             tests = dict(self.tests)
+            sitechecks = [dict(h, results=dict(h["results"])) for h in self.state["sitechecks"]]
         nodes = []
         for n in ranked + rest:
             d = n.to_dict()
@@ -829,6 +891,7 @@ class Engine:
             "pinned": self.state.get("pinned"),
             "last_switch": self.state.get("last_switch"),
             "tests": tests,
+            "sitechecks": sitechecks,
             "mode": "nodes" if ranked else ("tor" if self.tor.available() else "direct"),
             "xray": self.main.alive(),
             "tor": {"installed": self.tor.available(), "ready": self.tor.is_ready(),

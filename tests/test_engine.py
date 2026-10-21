@@ -190,3 +190,52 @@ def test_removed_config_can_come_back_from_sources(eng, monkeypatch):
                         lambda urls, **kw: ({u: [a.link] for u in urls}, {u: {"path": "direct", "count": 1} for u in urls}))
     eng._job_fetch()
     assert [n.id for n in eng.queue] == [a.id]
+
+
+def test_site_check_takes_a_bare_host_and_rejects_junk(eng):
+    assert eng.site_check("chatgpt.com") == (True, "chatgpt.com")
+    entry = eng.snapshot()["sitechecks"][0]
+    assert (entry["url"], entry["state"]) == ("https://chatgpt.com", "queued")
+    assert eng.jobs.get_nowait() == ("site_check", ("chatgpt.com",))
+    assert eng.site_check("not a site")[0] is False
+    assert eng.site_check("ftp://x.com")[0] is False
+
+
+def test_site_check_reports_reach_per_config_without_touching_health(eng, monkeypatch):
+    a, b, c = proven(eng, 1), proven(eng, 2), proven(eng, 3)
+    before = [(n.ok_ewma, n.checks) for n in (a, b, c)]
+    calls = []
+
+    def fake_check(nodes, kind, budget, url=None):
+        calls.append((kind, url))
+        return {a.id: {"ok": True, "ms": 312}, b.id: {"ok": False, "ms": None}}   # c: no answer
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng.site_check("https://x.com/home")
+    eng._job_site_check("x.com")
+    e = eng.snapshot()["sitechecks"][0]
+    assert calls == [("site", "https://x.com/home")]
+    assert (e["state"], e["reach"], e["total"]) == ("done", 1, 3)
+    assert e["results"] == {a.id: 312, b.id: None, c.id: None}
+    assert [(n.ok_ewma, n.checks) for n in (a, b, c)] == before
+
+
+def test_site_history_is_newest_first_one_entry_per_site_and_capped(eng):
+    for i in range(engine.SITE_HISTORY + 2):
+        eng.site_check(f"site{i}.com")
+    for h in eng.state["sitechecks"]:
+        h["state"] = "done"                     # a queued site is not queued twice
+    eng.site_check("site5.com")
+    hosts = [h["host"] for h in eng.snapshot()["sitechecks"]]
+    assert hosts[0] == "site5.com" and hosts.count("site5.com") == 1
+    assert len(hosts) == engine.SITE_HISTORY
+    assert eng.site_forget("site5.com") and "site5.com" not in [h["host"] for h in eng.snapshot()["sitechecks"]]
+
+
+def test_site_check_during_an_outage_is_not_blamed_on_the_configs(eng, monkeypatch):
+    nodes = [proven(eng, i) for i in range(4)]
+    monkeypatch.setattr(engine.tester, "check", lambda ns, kind, budget, url=None: {n.id: {"ok": False} for n in ns})
+    monkeypatch.setattr(eng, "online", lambda: False)
+    eng.site_check("x.com")
+    eng._job_site_check("x.com")
+    e = eng.snapshot()["sitechecks"][0]
+    assert e["state"] == "done" and e["offline"] and e["results"] == {}

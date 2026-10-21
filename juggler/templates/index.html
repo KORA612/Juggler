@@ -80,18 +80,26 @@
         <div class="head-actions">
           <span class="hint" id="balancer-hint">Auto · best score, sticky</span>
           <button class="btn ghost small" id="auto" hidden>Back to auto</button>
+          <button class="btn ghost small" id="site-rerun" hidden>↻ Check again</button>
           <button class="btn ghost small" id="add-open">+ Add configs</button>
           <button class="btn ghost small" id="test-all">Test all</button>
         </div>
       </div>
+      <div class="tabs">
+        <div class="tab-list" id="tabs" role="tablist"></div>
+        <form class="tab-add" id="site-form" title="Try every config on a site">
+          <input id="site-input" placeholder="+ Check a site" autocomplete="off" spellcheck="false" aria-label="Check a site">
+        </form>
+      </div>
       <div class="table-wrap"><div class="table-scroll">
-        <table>
+        <table id="node-table">
           <thead><tr>
             <th data-sort="rank">#</th>
             <th data-sort="country">Location</th>
             <th data-sort="proto">Protocol</th>
+            <th data-sort="site" class="num c-site" id="site-col"></th>
             <th data-sort="health" class="num" title="How reliably this config worked in recent real-use checks">Health</th>
-            <th data-sort="ping_ms" class="num">Ping</th>
+            <th data-sort="ping_ms" class="num c-ping">Ping</th>
             <th data-sort="speed_kbps" class="num">Speed</th>
             <th></th>
           </tr></thead>

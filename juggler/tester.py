@@ -16,8 +16,10 @@ import socket
 import ssl
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait
+from functools import partial
 
 from . import log, procs, xray
 from .paths import RUN, TEST_BASE_PORT, XRAY
@@ -38,7 +40,7 @@ QUICK_TIMEOUT, RETRY_TIMEOUT = 6, 12          # seconds; relaxed mode uses 12 / 
 VERIFY_BYTES, SITE_BYTES = 64_000, 16_000
 PAGE_TIMEOUT = 10
 SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # speed is 5 % of the score: cap the cost
-WORKERS = {"quick": 64, "full": 32, "speed": 4}
+WORKERS = {"quick": 64, "full": 32, "speed": 4, "site": 32}
 PORT_BASES = (TEST_BASE_PORT, 31000, 41000)
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"}  # urllib's default UA gets 403s
@@ -191,7 +193,21 @@ def _speed(port, node, relaxed):
     return None   # no reading: no evidence either way, so neither a pass nor a failure
 
 
-KINDS = {"quick": _quick, "full": _full, "speed": _speed}
+def _site(port, node, relaxed, url):
+    """Does `url` answer through this config? Any HTTP status below 500 counts: a 403
+    or a login wall still means the site is reachable. -> {"ok", "ms" to first answer}"""
+    t = time.perf_counter()
+    try:
+        status, _ = _get(port, url, 1024, PAGE_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        status = e.code
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "ms": None}
+    ms = int((time.perf_counter() - t) * 1000)
+    return {"ok": status < 500, "ms": ms if status < 500 else None}
+
+
+KINDS = {"quick": _quick, "full": _full, "speed": _speed, "site": _site}
 
 
 class _Tester:
@@ -226,13 +242,13 @@ class _Tester:
         procs.stop(self.proc)
 
 
-def check(nodes, kind="quick", relaxed=False, budget=60):
+def check(nodes, kind="quick", relaxed=False, budget=60, url=None):
     """-> {node.id: result}. Nodes missing from the result ran out of time or gave no
     evidence (unknown, not failed). Only one tester runs at a time; the engine
-    serialises its jobs."""
+    serialises its jobs. `url` is the target of kind "site"."""
     if not nodes:
         return {}
-    fn = KINDS[kind]
+    fn = partial(_site, url=url) if kind == "site" else KINDS[kind]
     with _Tester(nodes) as tst:
         ex = ThreadPoolExecutor(min(WORKERS[kind], len(nodes)))
         futs = {ex.submit(fn, tst.port(i), n, relaxed): n for i, n in enumerate(nodes)}

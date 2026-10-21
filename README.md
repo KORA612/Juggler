@@ -100,6 +100,7 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 | Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
 | Pick a specific node | **Use** pins it. **Back to auto** returns to automatic lowest-ping selection. |
+| Can a config open a site? | Working configs → **+ Check a site** → type a site (`chatgpt.com`) → Enter. Every config is tried and the site gets its own tab: ✓ with the response time or ✗ per config, reachable ones first. The last 10 sites keep their tabs (↻ checks again, × forgets). These checks don't change Health or ranking. |
 | Refresh now | **Refresh now** in the dashboard, or wait for the 15-minute timer. |
 | See what connects where | Dashboard → Live log → **● Record connections** (or start with `--log-connections`). Every new connection shows as `device → site · route`, for example `this PC → www.instagram.com:443 · 🇩🇪 DE vless` or `→ direct (whitelist)`. The **Connections** filter shows only those lines. Repeats are folded for 60 s, and it's off by default. It's kept in memory only, never written to disk. |
 
