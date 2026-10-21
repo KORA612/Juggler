@@ -22,7 +22,7 @@ pasted by hand       ─┘                             │ latency · speed    
                                          xray ── the config in use is sticky; watched every 20 s,
                                           │      switched only after two failures in a row
    ├─ SOCKS 127.0.0.1:20808 / HTTP 127.0.0.1:20809
-   ├─ Windows system proxy (one switch) · Chrome/Edge extension
+   ├─ Windows system proxy (one Connect button) · Chrome/Edge extension
    └─ subscription URL for your phone (v2rayNG, Hiddify, …)
 ```
 
@@ -32,7 +32,7 @@ pasted by hand       ─┘                             │ latency · speed    
 - **Resilient by design.** There is no reset moment. Every check adds evidence to a rolling score, one failed handshake never drops a config, and a config is retired only after repeated failures over 10+ minutes. Retired configs are retried later (30 min, 2 h, 6 h, 24 h). If your own internet drops, results are discarded instead of punishing the configs.
 - **The config in use is sticky.** A working config is never swapped for a "faster" one. It changes only after two failed checks in a row (the in-use config is checked with real traffic every 20 s), and Xray is updated live, so open connections and videos keep going.
 - **Fresh configs first.** 30 curated Telegram channels are read three pages deep (about 60 posts each, newest first), and the big GitHub dumps fill the rest of the queue. New configs are explored in small batches every 90 s.
-- **Tested like real use.** Each config is checked with real requests to **YouTube, Google, Instagram and Telegram** and shows a chip for each. A config that answers one small request but can't load the real youtube.com page on a fresh connection is dropped, which catches DPI that kills connections after the first request. A failed check is retried once with a longer timeout before it counts.
+- **Tested like real use.** Each config is checked with real requests to **YouTube, Google, Instagram and Telegram**, and how many of them load counts toward its Health. A config that answers one small request but can't load the real youtube.com page on a fresh connection is dropped, which catches DPI that kills connections after the first request. A failed check is retried once with a longer timeout before it counts.
 - **Measured honestly.** Every hour a sample of retired configs is re-tested with relaxed timeouts. The share that actually works (the false-negative rate) and the test bandwidth (MB/h) are shown in the dashboard.
 - **Ranked by reliability, then site coverage, then latency, then speed,** with flag emoji per exit country (they also render on Windows).
 - **Hands-on when you want it.** Paste your own configs (they're never auto-deleted), test any config with one click, or **Test all**.
@@ -96,10 +96,11 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 | Goal | How |
 |---|---|
 | Browser / any app | SOCKS5 `127.0.0.1:20808` or HTTP `127.0.0.1:20809` |
-| All Windows apps | Dashboard → **System proxy** |
+| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy; press again to restore it) |
 | Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
 | Pick a specific node | **Use** pins it. **Back to auto** returns to automatic lowest-ping selection. |
+| Can a config open a site? | Working configs → **+ Check a site** → type a site (`chatgpt.com`) → Enter. Every config is tried and the site gets its own tab: ✓ with the response time or ✗ per config, reachable ones first. The last 10 sites keep their tabs (↻ checks again, × forgets). These checks don't change Health or ranking. |
 | Refresh now | **Refresh now** in the dashboard, or wait for the 15-minute timer. |
 | See what connects where | Dashboard → Live log → **● Record connections** (or start with `--log-connections`). Every new connection shows as `device → site · route`, for example `this PC → www.instagram.com:443 · 🇩🇪 DE vless` or `→ direct (whitelist)`. The **Connections** filter shows only those lines. Repeats are folded for 60 s, and it's off by default. It's kept in memory only, never written to disk. |
 

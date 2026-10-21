@@ -63,6 +63,15 @@ def create_app(engine):
         engine.set_connlog(bool(body().get("on")))
         return jsonify(ok=True)
 
+    @app.post("/api/sitecheck")
+    def sitecheck():
+        ok, what = engine.site_check(body().get("url", ""))
+        return jsonify(ok=ok, host=what if ok else None, msg="" if ok else what), (200 if ok else 400)
+
+    @app.delete("/api/sitecheck")
+    def sitecheck_forget():
+        return jsonify(ok=engine.site_forget(body().get("host", "")))
+
     @app.post("/api/test")
     def test_one():
         ok = engine.test(body().get("id", ""))

@@ -29,7 +29,7 @@ def record(node, result, now):
         ms = result.get("ms")
         if ms:
             node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
-            node.ping_ms = int(node.lat_ewma)
+            node.ping_ms = int(ms)                  # shown: the latest; ranking uses lat_ewma
     else:
         node.fails += 1
     for site, passed in (result.get("sites") or {}).items():
@@ -40,12 +40,25 @@ def record(node, result, now):
         node.speed_kbps = int(node.kbps_ewma)
 
 
-def _site_score(node):
+def _coverage(node):
+    """Weighted share of sites that load (YouTube counts double), or None if untested."""
     known = {s: v for s, v in node.sites.items() if s in SITE_WEIGHT}
     if not known:
-        return 0.6                                  # untested: neutral, not zero
+        return None
     total = sum(SITE_WEIGHT[s] for s in known)
     return sum(SITE_WEIGHT[s] * v for s, v in known.items()) / total
+
+
+def _site_score(node):
+    cov = _coverage(node)
+    return 0.6 if cov is None else cov             # untested: neutral, not zero
+
+
+def health(node):
+    """0..1 for the dashboard: share of recent checks passed times the share of sites
+    that load. Sites not tested yet don't count against it."""
+    cov = _coverage(node)
+    return node.ok_ewma * (1.0 if cov is None else cov)
 
 
 def youtube_broken(node):

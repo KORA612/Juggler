@@ -1,3 +1,5 @@
+import pytest
+
 from juggler import links, scoring
 
 T0 = 1_000_000.0
@@ -124,3 +126,21 @@ def test_node_scoring_fields_round_trip():
     m = links.parse(d["link"])
     links.restore(m, d)
     assert (m.checks, m.lat_ewma, m.sites, m.last_ok) == (1, 321, {"yt": 1.0, "tg": 0.0}, T0)
+
+
+def test_ping_shows_the_latest_measurement_while_ranking_uses_the_average():
+    n = node()
+    scoring.record(n, ok(800), T0)
+    scoring.record(n, ok(300), T0 + 1)
+    assert n.ping_ms == 300
+    assert n.lat_ewma == pytest.approx(800 + 0.35 * (300 - 800))
+
+
+def test_health_is_pass_rate_times_site_coverage():
+    n = links.parse("trojan://pw@h.com:443?security=tls")
+    scoring.record(n, {"ok": True, "ms": 300}, 1000)
+    assert scoring.health(n) == 1.0                          # no site evidence yet: not penalised
+    scoring.record(n, {"ok": True, "ms": 300, "sites": {"yt": True, "google": True, "ig": False, "tg": True}}, 1001)
+    assert scoring.health(n) == pytest.approx(0.8)           # Instagram fails; YouTube counts double: 4/5
+    scoring.record(n, {"ok": False}, 1002)
+    assert scoring.health(n) == pytest.approx(0.65 * 0.8)

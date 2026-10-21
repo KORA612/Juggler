@@ -30,46 +30,49 @@
 
   <!-- HERO -->
   <section class="card hero">
-    <div class="hero-main">
-      <div class="flag" id="hero-flag">🏳️</div>
-      <div class="hero-text">
-        <div class="eyebrow" id="hero-eyebrow">Connecting</div>
-        <h1 id="hero-title">Looking for working configs…</h1>
-        <div class="chips" id="hero-chips"></div>
+    <div class="hero-left">
+      <div class="hero-main">
+        <div class="flag" id="hero-flag">🏳️</div>
+        <div class="hero-text">
+          <div class="eyebrow" id="hero-eyebrow">Connecting</div>
+          <h1 id="hero-title">Looking for working configs…</h1>
+          <div class="chips" id="hero-chips"></div>
+        </div>
+      </div>
+      <div class="hero-foot">
+        <div class="funnel" id="funnel"></div>
+        <button class="shield" id="safemode" role="switch" aria-checked="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/>
+            <path class="sh-on" d="M9 12l2 2 4-4"/>
+            <path class="sh-off" d="M9.5 9.5l5 5M14.5 9.5l-5 5"/>
+          </svg>
+          <span class="shield-text"><b>Safe mode</b><small id="safemode-state">On</small></span>
+        </button>
       </div>
     </div>
     <div class="hero-side">
-      <div class="ring" title="Next automatic refresh">
-        <svg viewBox="0 0 120 120">
-          <circle class="ring-bg" cx="60" cy="60" r="52"/>
-          <circle class="ring-fg" id="ring" cx="60" cy="60" r="52"/>
-        </svg>
-        <div class="ring-label"><b id="countdown">--:--</b><span>next source fetch</span></div>
+      <div class="power-wrap" id="ctl-sysproxy">
+        <div class="power-ring">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <title>Next source fetch</title>
+            <circle class="ring-bg" cx="60" cy="60" r="56"/>
+            <circle class="ring-fg" id="ring" cx="60" cy="60" r="56"/>
+          </svg>
+          <button class="power" id="sysproxy" role="switch" aria-checked="false" aria-label="System proxy">
+            <svg viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>
+          </button>
+        </div>
+        <div class="power-label" id="sysproxy-label">Connect</div>
+        <div class="power-desc" id="sysproxy-desc"></div>
+        <div class="fetch-line" title="The ring counts down to the next source fetch">
+          <span>next fetch <b id="countdown">--:--</b></span>
+          <button class="fetch-now" id="refresh" title="Fetch sources now" aria-label="Fetch sources now">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+          </button>
+        </div>
       </div>
-      <button class="btn primary" id="refresh">
-        <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
-        Refresh now
-      </button>
     </div>
-  </section>
-
-  <!-- CONTROLS + FUNNEL -->
-  <section class="row">
-    <div class="card control" id="ctl-sysproxy">
-      <div>
-        <div class="ctl-title">System proxy</div>
-        <div class="ctl-desc" id="sysproxy-desc">Route Windows apps through Juggler</div>
-      </div>
-      <button class="switch" id="sysproxy" role="switch" aria-checked="false"><span></span></button>
-    </div>
-    <div class="card control">
-      <div>
-        <div class="ctl-title">Safe mode</div>
-        <div class="ctl-desc">Drop configs that travel unencrypted</div>
-      </div>
-      <button class="switch" id="safemode" role="switch" aria-checked="false"><span></span></button>
-    </div>
-    <div class="card funnel" id="funnel"></div>
   </section>
 
   <section class="grid">
@@ -80,19 +83,27 @@
         <div class="head-actions">
           <span class="hint" id="balancer-hint">Auto · best score, sticky</span>
           <button class="btn ghost small" id="auto" hidden>Back to auto</button>
+          <button class="btn ghost small" id="site-rerun" hidden>↻ Check again</button>
           <button class="btn ghost small" id="add-open">+ Add configs</button>
           <button class="btn ghost small" id="test-all">Test all</button>
         </div>
       </div>
+      <div class="tabs">
+        <div class="tab-list" id="tabs" role="tablist"></div>
+        <form class="tab-add" id="site-form" title="Try every config on a site">
+          <input id="site-input" placeholder="+ Check a site" autocomplete="off" spellcheck="false" aria-label="Check a site">
+        </form>
+      </div>
       <div class="table-wrap"><div class="table-scroll">
-        <table>
+        <table id="node-table">
           <thead><tr>
             <th data-sort="rank">#</th>
             <th data-sort="country">Location</th>
             <th data-sort="proto">Protocol</th>
-            <th data-sort="sitescore" title="Real requests through the config: YouTube, Google, Instagram, Telegram">Sites</th>
-            <th data-sort="reliability" class="num" title="Share of recent checks that passed">Health</th>
-            <th data-sort="ping_ms" class="num">Ping · speed</th>
+            <th data-sort="site" class="num c-site" id="site-col"></th>
+            <th data-sort="health" class="num" title="How reliably this config worked in recent real-use checks">Health</th>
+            <th data-sort="ping_ms" class="num c-ping">Ping</th>
+            <th data-sort="speed_kbps" class="num">Speed</th>
             <th></th>
           </tr></thead>
           <tbody id="nodes"></tbody>
@@ -105,16 +116,26 @@
       <!-- PHONE -->
       <div class="card phone">
         <div class="card-head"><h2>Phone</h2><span class="hint">v2rayNG / Hiddify</span></div>
-        <div class="phone-body">
+        <div class="phone-top">
           <img id="sub-qr" alt="Subscription QR code">
-          <div class="phone-info">
-            <label>Subscription URL</label>
-            <div class="copy-field" data-copy-id="sub-url"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
-            <label>LAN proxy</label>
-            <div class="copy-field"><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
-            <div class="phone-status" id="phone-status"></div>
+          <div class="phone-steps">
+            <div class="steps-title">Scan to add Juggler</div>
+            <ol class="steps">
+              <li>Open v2rayNG or Hiddify</li>
+              <li>Tap <b>+</b> and scan this code</li>
+              <li>Keep the phone on this Wi-Fi</li>
+            </ol>
+            <div class="phone-seen" id="phone-seen"></div>
           </div>
         </div>
+        <div class="phone-fields">
+          <label>Subscription URL</label>
+          <div class="copy-field"><code id="sub-url">…</code><button class="mini" data-copy="sub-url">Copy</button></div>
+          <label>LAN proxy</label>
+          <div class="copy-field"><span class="cf-tag">SOCKS</span><code id="lan-socks">…</code><button class="mini" data-copy="lan-socks">Copy</button></div>
+          <div class="copy-field"><span class="cf-tag">HTTP</span><code id="lan-http">…</code><button class="mini" data-copy="lan-http">Copy</button></div>
+        </div>
+        <div class="phone-status" id="phone-status"></div>
       </div>
 
       <!-- WHITELIST -->
