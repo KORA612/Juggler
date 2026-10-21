@@ -110,6 +110,7 @@ class Engine:
         self.main = MainXray()
         self.tor = Tor()
         self.lock = threading.RLock()        # pool, queue, dead, primary
+        self.settling = threading.Lock()     # one _settle at a time
         self.jobs = queue.Queue()            # on-demand work from the dashboard
         self.wake = threading.Event()
         self.stopping = False
@@ -520,59 +521,62 @@ class Engine:
     # ---------- settle: pool -> xray ----------
 
     def _settle(self):
-        now = time.time()
-        changed = False
-        with self.lock:
-            retired = [n for n in self.pool.values() if scoring.is_dead(n, now) and n is not self.primary]
-            for n in retired:
-                self._retire(n, now)
-                del self.pool[n.id]
-            if retired:
-                log.info(TAG, f"retired {len(retired)} config(s) after repeated failures: "
-                              + ", ".join(scoring.label(n) for n in retired[:4]))
-            if len(self.pool) > POOL_MAX:
-                spare = sorted((n for n in self.pool.values() if not n.manual and n is not self.primary),
-                               key=scoring.score)[:len(self.pool) - POOL_MAX]
-                for n in spare:
+        """Pool -> xray. Runs after every scheduler job, and straight from the dashboard
+        and the watchdog so a switch never waits behind a test job that takes 10+ s."""
+        with self.settling:
+            now = time.time()
+            changed = False
+            with self.lock:
+                retired = [n for n in self.pool.values() if scoring.is_dead(n, now) and n is not self.primary]
+                for n in retired:
+                    self._retire(n, now)
                     del self.pool[n.id]
-            if len(self.state["dead"]) > DEAD_MAX:
-                keep = sorted(self.state["dead"].items(), key=lambda kv: kv[1].get("until", 0))[-DEAD_MAX:]
-                self.state["dead"] = dict(keep)
+                if retired:
+                    log.info(TAG, f"retired {len(retired)} config(s) after repeated failures: "
+                                  + ", ".join(scoring.label(n) for n in retired[:4]))
+                if len(self.pool) > POOL_MAX:
+                    spare = sorted((n for n in self.pool.values() if not n.manual and n is not self.primary),
+                                   key=scoring.score)[:len(self.pool) - POOL_MAX]
+                    for n in spare:
+                        del self.pool[n.id]
+                if len(self.state["dead"]) > DEAD_MAX:
+                    keep = sorted(self.state["dead"].items(), key=lambda kv: kv[1].get("until", 0))[-DEAD_MAX:]
+                    self.state["dead"] = dict(keep)
 
-            ranked = scoring.rank(self.pool.values())
-            current = self.primary if self.primary and self.primary.id in self.pool else None
-            manual = self.pool.get(self.state.get("pinned") or "")
-            chosen, reason = scoring.choose_primary(current, ranked, manual)
-            if chosen is not current:
-                changed = True
-                if current is not None:                 # a real switch, not the first pick
-                    self.state["last_switch"] = {"at": now, "reason": reason,
-                                                 "to": chosen.id if chosen else None}
-                if chosen is not None:
-                    log.ok(TAG, f"now using {scoring.label(chosen)} · {reason}")
-                else:
-                    log.warn(TAG, "no working config right now")
-            self.primary = chosen
-            active = ranked[:ACTIVE]
-            if chosen is not None and chosen not in active:
-                active = [chosen] + active[:ACTIVE - 1]
-            stats = self.state.setdefault("stats", {})
-            stats.update(pool=len(self.pool), eligible=len(ranked), active=len(active),
-                         dead=len(self.state["dead"]))
-        if [n.id for n in active] != [n.id for n in self.active] or changed \
-                or (chosen is not None and self.main.pinned != chosen.id):
-            added, removed = self.main.sync(active, primary=chosen)
-            if added or removed:
-                log.info("XRAY", f"updated live · +{added} −{removed} configs · no restart")
-            self.active = active
-        # Tor is a fallback, not a service: only while nothing else can carry traffic.
-        if ranked:
-            self.tor.stop("configs are working again")
-        elif self.pool or self.state.get("last_fetch"):
-            self.tor.start("no working configs, traffic falls back to Tor")
-        self._bw.append((now, tester.bytes_used()))
-        self._bw = [s for s in self._bw if now - s[0] <= 3600]
-        self.save()
+                ranked = scoring.rank(self.pool.values())
+                current = self.primary if self.primary and self.primary.id in self.pool else None
+                manual = self.pool.get(self.state.get("pinned") or "")
+                chosen, reason = scoring.choose_primary(current, ranked, manual)
+                if chosen is not current:
+                    changed = True
+                    if current is not None:                 # a real switch, not the first pick
+                        self.state["last_switch"] = {"at": now, "reason": reason,
+                                                     "to": chosen.id if chosen else None}
+                    if chosen is not None:
+                        log.ok(TAG, f"now using {scoring.label(chosen)} · {reason}")
+                    else:
+                        log.warn(TAG, "no working config right now")
+                self.primary = chosen
+                active = ranked[:ACTIVE]
+                if chosen is not None and chosen not in active:
+                    active = [chosen] + active[:ACTIVE - 1]
+                stats = self.state.setdefault("stats", {})
+                stats.update(pool=len(self.pool), eligible=len(ranked), active=len(active),
+                             dead=len(self.state["dead"]))
+            if [n.id for n in active] != [n.id for n in self.active] or changed \
+                    or (chosen is not None and self.main.pinned != chosen.id):
+                added, removed = self.main.sync(active, primary=chosen)
+                if added or removed:
+                    log.info("XRAY", f"updated live · +{added} −{removed} configs · no restart")
+                self.active = active
+            # Tor is a fallback, not a service: only while nothing else can carry traffic.
+            if ranked:
+                self.tor.stop("configs are working again")
+            elif self.pool or self.state.get("last_fetch"):
+                self.tor.start("no working configs, traffic falls back to Tor")
+            self._bw.append((now, tester.bytes_used()))
+            self._bw = [s for s in self._bw if now - s[0] <= 3600]
+            self.save()
 
     # ---------- watch: the config in use, end to end ----------
 
@@ -627,10 +631,10 @@ class Engine:
                 fails = n.fails
             if fails >= 2:
                 log.warn(TAG, f"{scoring.label(n)} stopped working ({fails} checks in a row) → switching")
-                self.request("settle")
-
-    def _job_settle(self):
-        pass                                               # _loop settles after every job
+                try:
+                    self._settle()
+                except Exception as e:  # noqa: BLE001 - the watchdog must not die; the scheduler retries
+                    log.error(TAG, f"settle crashed: {type(e).__name__}: {e}")
 
     # ---------- dashboard actions ----------
 
@@ -671,7 +675,8 @@ class Engine:
             if not n.manual:
                 self._retire(n, time.time())
         log.info(TAG, f"removed {scoring.label(n)}")
-        self.request("settle")
+        self._settle()
+        self.save(force=True)
         return True
 
     def set_safe_mode(self, on):
@@ -682,7 +687,7 @@ class Engine:
                 for k in [k for k, n in self.pool.items() if not links.is_safe(n) and not n.manual]:
                     del self.pool[k]
                 self.queue = [n for n in self.queue if links.is_safe(n)]
-        self.request("settle")
+        self._settle()
         self.save(force=True)
 
     def set_sysproxy(self, on):
@@ -740,7 +745,7 @@ class Engine:
             self.state["pinned"] = node_id or None
         log.info(TAG, f"pinned {scoring.label(self.pool[node_id])} by hand" if node_id
                  else "back to automatic choice")
-        self.request("settle")
+        self._settle()
         return True
 
     # ---------- views ----------

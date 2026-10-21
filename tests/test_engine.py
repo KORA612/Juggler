@@ -111,3 +111,12 @@ def test_manual_pin_is_respected(eng):
     assert eng.pin(b.id)
     eng._settle()
     assert eng.primary is b and eng.main.pinned == b.id
+
+
+def test_pin_switches_at_once_without_waiting_for_the_scheduler(eng):
+    a, b = proven(eng, 1, ms=200), proven(eng, 2, ms=1500)
+    eng._settle()
+    assert eng.pin(b.id)                       # no scheduler running: nothing else would settle
+    assert eng.primary is b and eng.main.pinned == b.id
+    assert eng.pin(None)                       # back to auto: b still works, so it stays (sticky)
+    assert eng.state["pinned"] is None and eng.primary is b
