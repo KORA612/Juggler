@@ -120,3 +120,23 @@ def test_pin_switches_at_once_without_waiting_for_the_scheduler(eng):
     assert eng.primary is b and eng.main.pinned == b.id
     assert eng.pin(None)                       # back to auto: b still works, so it stays (sticky)
     assert eng.state["pinned"] is None and eng.primary is b
+
+
+class FakeTesterXray:
+    def __init__(self, nodes): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def port(self, i): return 0
+
+
+def test_speed_test_with_no_download_is_not_counted_as_a_passed_check(eng, monkeypatch):
+    a = proven(eng, 1)
+    scoring.record(a, {"ok": False}, time.time())          # one failure: one more triggers failover
+    health, fails = a.ok_ewma, a.fails
+    monkeypatch.setattr(engine.tester, "_Tester", FakeTesterXray)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 0)
+    eng._job_speed()
+    assert (a.ok_ewma, a.fails) == (health, fails)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 4200)
+    eng._job_speed()
+    assert a.fails == 0 and a.ok_ewma > health and a.speed_kbps == 4200

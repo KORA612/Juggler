@@ -188,7 +188,7 @@ def _speed(port, node, relaxed):
         kbps = _speed_once(port, url.format(n=SPEED_BYTES))
         if kbps:
             return {"ok": True, "kbps": kbps}
-    return {"ok": True, "kbps": 0}   # no speed reading is not a liveness failure
+    return None   # no reading: no evidence either way, so neither a pass nor a failure
 
 
 KINDS = {"quick": _quick, "full": _full, "speed": _speed}
@@ -227,8 +227,9 @@ class _Tester:
 
 
 def check(nodes, kind="quick", relaxed=False, budget=60):
-    """-> {node.id: result}. Nodes missing from the result ran out of time (unknown,
-    not failed). Only one tester runs at a time; the engine serialises its jobs."""
+    """-> {node.id: result}. Nodes missing from the result ran out of time or gave no
+    evidence (unknown, not failed). Only one tester runs at a time; the engine
+    serialises its jobs."""
     if not nodes:
         return {}
     fn = KINDS[kind]
@@ -237,4 +238,4 @@ def check(nodes, kind="quick", relaxed=False, budget=60):
         futs = {ex.submit(fn, tst.port(i), n, relaxed): n for i, n in enumerate(nodes)}
         done, _ = wait(futs, timeout=budget)
         ex.shutdown(wait=False, cancel_futures=True)
-        return {futs[f].id: f.result() for f in done}
+        return {futs[f].id: r for f in done if (r := f.result()) is not None}
