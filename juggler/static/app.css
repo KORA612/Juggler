@@ -531,3 +531,7 @@ tbody tr.noreach td.c-site { opacity: 1; }
 .reach.ok { color: var(--accent); }
 .reach.bad { color: var(--red); }
 .reach.na { color: var(--faint); font-weight: 400; }
+
+/* ---------- row actions ---------- */
+.acts .mini.icon { display: inline-grid; place-items: center; padding: 3px 6px; }
+.mini.icon svg { width: 13px; height: 13px; }
