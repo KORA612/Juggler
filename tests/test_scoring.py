@@ -1,3 +1,5 @@
+import pytest
+
 from juggler import links, scoring
 
 T0 = 1_000_000.0
@@ -124,3 +126,11 @@ def test_node_scoring_fields_round_trip():
     m = links.parse(d["link"])
     links.restore(m, d)
     assert (m.checks, m.lat_ewma, m.sites, m.last_ok) == (1, 321, {"yt": 1.0, "tg": 0.0}, T0)
+
+
+def test_ping_shows_the_latest_measurement_while_ranking_uses_the_average():
+    n = node()
+    scoring.record(n, ok(800), T0)
+    scoring.record(n, ok(300), T0 + 1)
+    assert n.ping_ms == 300
+    assert n.lat_ewma == pytest.approx(800 + 0.35 * (300 - 800))

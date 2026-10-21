@@ -29,7 +29,7 @@ def record(node, result, now):
         ms = result.get("ms")
         if ms:
             node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
-            node.ping_ms = int(node.lat_ewma)
+            node.ping_ms = int(ms)                  # shown: the latest; ranking uses lat_ewma
     else:
         node.fails += 1
     for site, passed in (result.get("sites") or {}).items():
