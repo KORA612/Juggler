@@ -11,6 +11,8 @@ DEAD_MIN_AGE = 600       # ...and only if it hasn't worked for this long (second
 BACKOFF = (1800, 7200, 21600, 86400)   # retry a retired config after 30 m, 2 h, 6 h, 24 h
 SITE_WEIGHT = {"yt": 2.0, "google": 1.0, "ig": 1.0, "tg": 1.0}
 SITE_NAMES = {"yt": "YouTube", "google": "Google", "ig": "Instagram", "tg": "Telegram"}
+DEFAULT_MIN_KBPS = 500   # below this a config answers but can't load real pages
+min_kbps = DEFAULT_MIN_KBPS   # set from the dashboard (engine.set_min_speed); 0 = off
 
 
 def _ewma(old, new, first):
@@ -90,8 +92,18 @@ def score(node):
     return s
 
 
+def too_slow(node):
+    """Measured below the minimum speed. Kept in the pool and re-measured, just not used."""
+    return min_kbps > 0 and speed_known(node) and node.kbps_ewma < min_kbps
+
+
 def eligible(node):
-    """May carry traffic: has worked, isn't on a failure streak, loads YouTube."""
+    """May carry traffic: has worked, isn't on a failure streak, loads YouTube, and
+    isn't measured below the minimum speed."""
+    return usable(node) and not too_slow(node)
+
+
+def usable(node):
     return node.last_ok > 0 and node.fails < 2 and not youtube_broken(node)
 
 
@@ -108,7 +120,11 @@ def backoff(strikes):
 
 
 def rank(nodes):
-    return sorted((n for n in nodes if eligible(n)), key=score, reverse=True)
+    """Configs that may carry traffic, best first. When *every* working config is below
+    the minimum speed, slow beats nothing: they're ranked instead of falling to Tor."""
+    nodes = [n for n in nodes if usable(n)]
+    fast = [n for n in nodes if not too_slow(n)]
+    return sorted(fast or nodes, key=score, reverse=True)
 
 
 def label(node):
@@ -125,6 +141,13 @@ def choose_primary(current, ranked, manual):
         best = next((n for n in ranked if n is not manual and n.fails == 0), None)
         if best is not None:
             return best, f"pinned config {label(manual)} failed {manual.fails} checks"
+    if current is not None and current.last_ok and current.fails < 2 and current in ranked:
+        return current, ""
+    if current is not None and current.last_ok and current.fails < 2 and too_slow(current):
+        best = next((n for n in ranked if n is not current and n.fails == 0), None)
+        if best is None:
+            return current, ""
+        return best, f"{label(current)} is below {min_kbps} kbps ({current.speed_kbps} kbps)"
     if current is not None and current.last_ok and current.fails < 2:
         return current, ""
     best = next((n for n in ranked if n is not current and n.fails == 0), None)

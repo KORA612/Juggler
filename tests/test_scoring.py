@@ -173,3 +173,51 @@ def test_a_lower_bound_lifts_a_low_average_but_never_sets_or_lowers_one():
     before = n.kbps_ewma
     scoring.record(n, {"kbps_min": 900}, T0 + 10)
     assert n.kbps_ewma == before
+
+
+@pytest.fixture
+def floor(monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+
+
+def working(i, kbps=None):
+    n = node(i)
+    for k in range(4):
+        scoring.record(n, ok(yt=True), T0 + k)
+    if kbps is not None:
+        scoring.record(n, {"kbps": kbps}, T0 + 5)
+    return n
+
+
+def test_a_config_below_the_minimum_speed_is_kept_but_not_used(floor):
+    slow, fast, unmeasured = working(1, 100), working(2, 2000), working(3)
+    assert scoring.too_slow(slow) and not scoring.eligible(slow)
+    assert not scoring.is_dead(slow, T0 + 100_000)              # not retired
+    assert [n.id for n in scoring.rank([slow, fast, unmeasured])] == [fast.id, unmeasured.id]
+
+
+def test_minimum_speed_off_lets_slow_configs_in(monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 0)
+    assert scoring.eligible(working(1, 100))
+
+
+def test_when_every_config_is_slow_slow_beats_nothing(floor):
+    a, b = working(1, 100), working(2, 300)
+    assert {n.id for n in scoring.rank([a, b])} == {a.id, b.id}
+
+
+def test_the_config_in_use_is_dropped_once_it_measures_slow(floor):
+    cur, other = working(1, 2000), working(2, 2000)
+    assert scoring.choose_primary(cur, scoring.rank([cur, other]), None)[0] is cur
+    for _ in range(6):
+        scoring.record(cur, {"kbps": 80}, T0 + 10)
+    chosen, why = scoring.choose_primary(cur, scoring.rank([cur, other]), None)
+    assert chosen is other and "below 500 kbps" in why
+    assert scoring.choose_primary(cur, scoring.rank([cur, other]), cur)[0] is cur   # your pin wins
+
+
+def test_a_slow_config_earns_its_way_back(floor):
+    n = working(1, 100)
+    for k in range(10):
+        scoring.record(n, {"kbps": 1500}, T0 + 10 + k)
+    assert scoring.eligible(n)

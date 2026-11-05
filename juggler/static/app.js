@@ -124,6 +124,10 @@ function renderControls() {
   sm.title = S.safe_mode ? "Safe mode on: configs that send traffic unencrypted are dropped. Click to turn off"
     : "Safe mode off: unencrypted configs are allowed. Click to turn on";
   $("#safemode-state").textContent = S.safe_mode ? "On" : "Off";
+  const ms = $("#minspeed");
+  const opts = (S.speed_floors || []).map((k) => `<option value="${k}">${k ? fmtSpeed(k) : "Off"}</option>`).join("");
+  if (ms.dataset.html !== opts) { ms.innerHTML = opts; ms.dataset.html = opts; }
+  if (document.activeElement !== ms) ms.value = String(S.min_kbps);
   const st = S.stats || {};
   const steps = [["links", "links found"], ["queued", "queued"], ["pool", "in pool"], ["eligible", "working"], ["active", "loaded"]];
   $("#funnel").innerHTML = steps.map(([k, label], i) => {
@@ -243,7 +247,7 @@ function renderNodes() {
       <td class="num c-site">${site ? siteCell(n, site) : ""}</td>
       <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
       <td class="num c-ping">${n.ping_ms > 0 ? `<span class="metric" style="color:${pingColor(n.ping_ms)}">${n.ping_ms} ms</span>` : '<span class="metric na">–</span>'}</td>
-      <td class="num">${sp ? `<span class="metric" style="color:${speedColor(n.speed_kbps)}">${sp}</span>` : '<span class="metric na">–</span>'}</td>
+      <td class="num">${sp || n.speed_kbps === 0 ? `<span class="metric${n.slow ? " slow" : ""}" style="color:${speedColor(n.speed_kbps)}"${n.slow ? ` title="Below your ${fmtSpeed(S.min_kbps)} minimum: kept and re-measured, not used"` : ""}>${sp || "0 kbps"}</span>` : '<span class="metric na">–</span>'}</td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>
@@ -364,6 +368,11 @@ $("#sysproxy").onclick = async () => {
 $("#safemode").onclick = async () => {
   const on = $("#safemode").getAttribute("aria-checked") !== "true";
   try { await api("/api/safemode", "POST", { on }); toast(on ? "Safe mode on" : "Safe mode off: unencrypted configs allowed from the next refresh"); poll(); } catch (e) { toast(e.message, true); }
+};
+$("#minspeed").onchange = async (ev) => {
+  const kbps = +ev.target.value;
+  try { await api("/api/minspeed", "POST", { kbps }); toast(kbps ? `Configs slower than ${fmtSpeed(kbps)} won't be used` : "Minimum speed off"); poll(); }
+  catch (e) { toast(e.message, true); }
 };
 $("#test-all").onclick = async () => {
   if (testsActive()) return;

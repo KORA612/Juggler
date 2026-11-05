@@ -243,3 +243,28 @@ def test_site_check_during_an_outage_is_not_blamed_on_the_configs(eng, monkeypat
     eng._job_site_check("x.com")
     e = eng.snapshot()["sitechecks"][0]
     assert e["state"] == "done" and e["offline"] and e["results"] == {}
+
+
+def test_minimum_speed_is_a_saved_setting(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", scoring.min_kbps)
+    assert eng.snapshot()["min_kbps"] == 500
+    assert not eng.set_min_speed(123)                       # only the offered steps
+    assert eng.set_min_speed(1000)
+    assert scoring.min_kbps == 1000
+    again = engine.Engine()
+    assert again.state["min_kbps"] == 1000 and scoring.min_kbps == 1000
+
+
+def test_speed_job_re_measures_slow_configs_too(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    good, slow = proven(eng, 1), proven(eng, 2)
+    scoring.record(slow, {"kbps": 100}, time.time())
+    seen = []
+
+    def fake_check(nodes, kind, budget):
+        seen.extend(n.id for n in nodes)
+        return {slow.id: {"ok": True, "kbps": 3000}}
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng._job_speed()
+    assert set(seen) == {good.id, slow.id}
+    assert slow.speed_kbps > 100

@@ -130,9 +130,10 @@ class Engine:
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
                       "last_fetch": 0, "report": {}, "stats": {}, "pinned": None,
                       "dead": {}, "sitechecks": [], "last_sub": None, "fn": None, "last_switch": None,
-                      "connlog": False}
+                      "connlog": False, "min_kbps": scoring.DEFAULT_MIN_KBPS}
         self._ensure_files()
         self._load()
+        scoring.min_kbps = int(self.state.get("min_kbps") or 0)
         self.connlog = connlog.ConnLog(self._route_label)
         self.connlog.enabled = bool(self.state.get("connlog"))
         self.main.on_line = self.connlog.feed
@@ -437,8 +438,13 @@ class Engine:
                                        for s in ("google", "ig", "tg")))
 
     def _job_speed(self):
+        """The best few, plus the slow configs closest to the minimum: throttling comes
+        and goes, and this is how a slow config earns its way back."""
         with self.lock:
             ranked = scoring.rank(self.pool.values())[:SPEED_TOP]
+            slow = sorted((n for n in self.pool.values() if scoring.usable(n) and scoring.too_slow(n)
+                           and n not in ranked), key=lambda n: n.kbps_ewma, reverse=True)[:SPEED_TOP]
+            ranked += slow
         if not ranked:
             return
         self.phase = "speed"
@@ -763,6 +769,24 @@ class Engine:
         self.save(force=True)
         return True
 
+    SPEED_FLOORS = (0, 250, 500, 1000, 2000, 3000)
+
+    def set_min_speed(self, kbps):
+        try:
+            kbps = int(kbps)
+        except (TypeError, ValueError):
+            return False
+        if kbps not in self.SPEED_FLOORS:
+            return False
+        self.state["min_kbps"] = scoring.min_kbps = kbps
+        with self.lock:
+            slow = sum(1 for n in self.pool.values() if scoring.usable(n) and scoring.too_slow(n))
+        log.info(TAG, f"minimum speed {kbps} kbps · {slow} config(s) below it are kept but not used"
+                 if kbps else "minimum speed off")
+        self._settle()
+        self.save(force=True)
+        return True
+
     def set_safe_mode(self, on):
         self.state["safe_mode"] = bool(on)
         log.info(TAG, f"safe mode {'on' if on else 'off'}")
@@ -869,6 +893,7 @@ class Engine:
         for n in ranked + rest:
             d = n.to_dict()
             d.update(active=n.id == primary, in_balancer=n.id in loaded, eligible=n in ranked,
+                     slow=scoring.too_slow(n),
                      score=round(100 * scoring.score(n)), health=round(100 * scoring.health(n)),
                      sites={k: round(v, 2) for k, v in n.sites.items()})
             nodes.append(d)
@@ -898,6 +923,7 @@ class Engine:
                     "status": self.tor.status(), "progress": self.tor.progress,
                     "bridges": len(self.text_file("bridges"))},
             "safe_mode": self.state.get("safe_mode", True),
+            "min_kbps": scoring.min_kbps, "speed_floors": self.SPEED_FLOORS,
             "connlog": {"on": self.connlog.enabled, "count": self.connlog.count},
             "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False),
                          "wsl": IS_WSL},

@@ -53,6 +53,11 @@ def create_app(engine):
         engine.set_safe_mode(bool(body().get("on")))
         return jsonify(ok=True)
 
+    @app.post("/api/minspeed")
+    def minspeed():
+        ok = engine.set_min_speed(body().get("kbps"))
+        return jsonify(ok=ok, msg="" if ok else "unknown speed"), (200 if ok else 400)
+
     @app.post("/api/pin")
     def pin():
         ok = engine.pin(body().get("id"))
