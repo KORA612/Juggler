@@ -136,10 +136,14 @@ def test_speed_test_with_no_download_is_not_counted_as_a_passed_check(eng, monke
     scoring.record(a, {"ok": False}, time.time())          # one failure: one more triggers failover
     health, fails = a.ok_ewma, a.fails
     monkeypatch.setattr(engine.tester, "_Tester", FakeTesterXray)
-    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 0)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: None)   # no answer
     eng._job_speed()
-    assert (a.ok_ewma, a.fails) == (health, fails)
-    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 4200)
+    assert (a.ok_ewma, a.fails, a.speed_kbps) == (health, fails, -1)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: {"kbps": 0})   # headers, no body
+    eng._job_speed()
+    assert (a.ok_ewma, a.fails) == (health, fails) and a.speed_kbps == 0   # slow is evidence, not a pass
+    a.speed_kbps, a.kbps_ewma = -1, 0.0
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: {"kbps": 4200})
     eng._job_speed()
     assert a.fails == 0 and a.ok_ewma > health and a.speed_kbps == 4200
 

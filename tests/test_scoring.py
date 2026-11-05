@@ -144,3 +144,32 @@ def test_health_is_pass_rate_times_site_coverage():
     assert scoring.health(n) == pytest.approx(0.8)           # Instagram fails; YouTube counts double: 4/5
     scoring.record(n, {"ok": False}, 1002)
     assert scoring.health(n) == pytest.approx(0.65 * 0.8)
+
+
+def test_a_slow_reading_counts_and_unmeasured_is_not_neutral_fast():
+    slow, fresh = node(1), node(2)
+    for n in (slow, fresh):
+        for i in range(4):
+            scoring.record(n, ok(yt=True), T0 + i)
+    scoring.record(slow, {"kbps": 100}, T0 + 5)
+    assert slow.speed_kbps == 100 and slow.checks == 4         # speed evidence alone isn't a check
+    assert fresh.speed_kbps == -1
+    fast = node(3)
+    for i in range(4):
+        scoring.record(fast, ok(yt=True), T0 + i)
+    scoring.record(fast, {"kbps": 3000}, T0 + 5)
+    assert scoring.score(fast) > scoring.score(fresh) > scoring.score(slow)
+
+
+def test_a_lower_bound_lifts_a_low_average_but_never_sets_or_lowers_one():
+    n = node()
+    scoring.record(n, {"kbps_min": 900}, T0)
+    assert n.speed_kbps == -1                                  # no measurement yet
+    scoring.record(n, {"kbps": 100}, T0)
+    for i in range(8):
+        scoring.record(n, {"kbps_min": 900}, T0 + i)
+    assert 800 < n.speed_kbps <= 900                           # recovered toward the bound
+    scoring.record(n, {"kbps": 5000}, T0 + 9)
+    before = n.kbps_ewma
+    scoring.record(n, {"kbps_min": 900}, T0 + 10)
+    assert n.kbps_ewma == before

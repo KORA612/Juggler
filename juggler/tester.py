@@ -5,8 +5,15 @@ check(nodes, "quick")   YouTube generate_204 -> alive + latency. One retry with 
 check(nodes, "full")    quick, then on a *fresh* connection: ~64 KB of the real
                         youtube.com page (DPI often lets one small request through and
                         kills the flow afterwards), small real requests to Google,
-                        Instagram and Telegram, and the exit country.
-check(nodes, "speed")   sustained download for a few seconds, timed from the first byte.
+                        Instagram and Telegram, and the exit country. The page download
+                        is timed too, so every full check gives a speed reading for free.
+check(nodes, "speed")   sustained download for a few seconds, timed from the headers.
+
+Speed readings come in two kinds. {"kbps": x} is a real measurement: the download ran
+into its time limit (the link was the bottleneck) or crawled for SLOW_BODY_S. A fast
+small download only proves a lower bound, since TCP slow start dominates it:
+{"kbps_min": x} can lift a low average back up but never sets one. A config that
+answers the 204 in 300 ms but trickles 0.1 Mbps is exactly what the 204 can't see.
 
 Cloudflare is deliberately not the liveness target: Workers-based configs can't
 reach Cloudflare and would look dead.
@@ -39,7 +46,8 @@ SPEED_URLS = ("https://speed.cloudflare.com/__down?bytes={n}",
 QUICK_TIMEOUT, RETRY_TIMEOUT = 6, 12          # seconds; relaxed mode uses 12 / 18
 VERIFY_BYTES, SITE_BYTES = 64_000, 16_000
 PAGE_TIMEOUT = 10
-SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # speed is 5 % of the score: cap the cost
+SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # cap the cost of a sustained test
+SLOW_BODY_S = 2.0      # a body that takes this long is a real (slow) reading, not slow start
 WORKERS = {"quick": 64, "full": 32, "speed": 4, "site": 32}
 PORT_BASES = (TEST_BASE_PORT, 31000, 41000)
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -114,12 +122,52 @@ def _alive(port, relaxed=False):
     return None
 
 
-def _page_ok(port, url, need, timeout=PAGE_TIMEOUT):
+def _timed(port, url, limit, timeout, body_s, headers=None):
+    """Download up to `limit` bytes, timing the body from the moment the headers arrive.
+    -> (status, got, secs, capped). Raises only if no response arrived at all.
+    capped: stopped by `body_s` or a stalled read before `limit`, i.e. the link
+    was the bottleneck for the whole window."""
+    req = urllib.request.Request(url, headers=dict(UA, **(headers or {})))
+    r = _opener(port).open(req, timeout=timeout)
+    t0, got, capped = time.perf_counter(), 0, False
     try:
-        status, body = _get(port, url, need, timeout, deadline=time.perf_counter() + timeout)
-        return status == 200 and len(body) >= need
+        while got < limit:
+            try:
+                chunk = r.read(min(32768, limit - got))
+            except Exception:  # noqa: BLE001 - a stalled read ends the window
+                capped = True
+                break
+            if not chunk:
+                break
+            got += len(chunk)
+            if time.perf_counter() - t0 > body_s:
+                capped = got < limit
+                break
+    finally:
+        r.close()
+    _count(got)
+    return r.status, got, time.perf_counter() - t0, capped
+
+
+def reading(got, secs, capped):
+    """Bytes over time -> {"kbps": x} (a measurement) or {"kbps_min": x} (a lower bound)."""
+    kbps = int(got * 8 / 1000 / max(secs, 0.05))
+    if capped or secs >= SLOW_BODY_S:
+        return {"kbps": kbps}
+    return {"kbps_min": kbps}
+
+
+def _page(port, url, need, timeout=PAGE_TIMEOUT):
+    """-> (loaded, speed reading or {})."""
+    try:
+        status, got, secs, capped = _timed(port, url, need, timeout, timeout)
     except Exception:  # noqa: BLE001
-        return False
+        return False, {}
+    return status == 200 and got >= need, reading(got, secs, capped)
+
+
+def _page_ok(port, url, need, timeout=PAGE_TIMEOUT):
+    return _page(port, url, need, timeout)[0]
 
 
 def _geo(port):
@@ -153,43 +201,32 @@ def _full(port, node, relaxed):
     ms = _alive(port, relaxed)
     if ms is None:
         return {"ok": False, "ms": None}
-    sites = {"yt": _page_ok(port, YT_PAGE, VERIFY_BYTES)}
+    yt, speed = _page(port, YT_PAGE, VERIFY_BYTES)
+    sites = {"yt": yt}
     for site, (url, need) in SITE_URLS.items():
         sites[site] = _page_ok(port, url, need)
-    res = {"ok": sites["yt"], "ms": ms, "sites": sites}
+    res = dict(speed, ok=yt, ms=ms, sites=sites)
     if not node.country:
         res["country"], res["ip"] = _geo(port)
     return res
 
 
-def _speed_once(port, url):
-    got, t0, t_first = 0, time.perf_counter(), None
+def _speed_once(port, url, limit=SPEED_BYTES, seconds=SPEED_SECONDS):
+    """-> speed reading, or None when the URL didn't answer (no evidence)."""
     try:
-        req = urllib.request.Request(url, headers=dict(UA, Range=f"bytes=0-{SPEED_BYTES - 1}"))
-        with _opener(port).open(req, timeout=8) as r:
-            while got < SPEED_BYTES:
-                chunk = r.read(32768)
-                if not chunk:
-                    break
-                now = time.perf_counter()
-                if t_first is None:
-                    t_first = now
-                got += len(chunk)
-                if now - t_first > SPEED_SECONDS:
-                    break
-    except Exception:  # noqa: BLE001 - keep whatever arrived
-        pass
-    _count(got)
-    if t_first is None or got < 65536:
-        return 0
-    return int(got * 8 / 1000 / max(time.perf_counter() - t_first, 0.05))
+        _, got, secs, capped = _timed(port, url, limit, 8, seconds,
+                                      headers={"Range": f"bytes=0-{limit - 1}"})
+    except Exception:  # noqa: BLE001
+        return None
+    return reading(got, secs, capped)
 
 
 def _speed(port, node, relaxed):
     for url in SPEED_URLS:
-        kbps = _speed_once(port, url.format(n=SPEED_BYTES))
-        if kbps:
-            return {"ok": True, "kbps": kbps}
+        r = _speed_once(port, url.format(n=SPEED_BYTES))
+        if r is not None:
+            # it answered: a success, unless not one byte of the body came through
+            return dict(r, ok=True) if r.get("kbps", 1) > 0 else r
     return None   # no reading: no evidence either way, so neither a pass nor a failure
 
 

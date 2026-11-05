@@ -17,26 +17,38 @@ def _ewma(old, new, first):
     return new if first else old + ALPHA * (new - old)
 
 
+def speed_known(node):
+    return node.speed_kbps >= 0
+
+
 def record(node, result, now):
-    """Fold one check into the node. result = {"ok", "ms"?, "sites"?: {site: bool}, "kbps"?}"""
-    ok = bool(result.get("ok"))
-    node.ok_ewma = _ewma(node.ok_ewma, 1.0 if ok else 0.0, node.checks == 0)
-    node.checks += 1
-    node.last_check = node.tested_at = now
-    if ok:
-        node.fails = 0
-        node.last_ok = now
-        ms = result.get("ms")
-        if ms:
-            node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
-            node.ping_ms = int(ms)                  # shown: the latest; ranking uses lat_ewma
-    else:
-        node.fails += 1
+    """Fold one check into the node. result = {"ok"?, "ms"?, "sites"?: {site: bool},
+    "kbps"? (a measurement), "kbps_min"? (a lower bound)}. Without "ok" it's speed
+    evidence only and doesn't count as a check."""
+    if "ok" in result:
+        ok = bool(result.get("ok"))
+        node.ok_ewma = _ewma(node.ok_ewma, 1.0 if ok else 0.0, node.checks == 0)
+        node.checks += 1
+        node.last_check = node.tested_at = now
+        if ok:
+            node.fails = 0
+            node.last_ok = now
+            ms = result.get("ms")
+            if ms:
+                node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
+                node.ping_ms = int(ms)              # shown: the latest; ranking uses lat_ewma
+        else:
+            node.fails += 1
     for site, passed in (result.get("sites") or {}).items():
         node.sites[site] = _ewma(node.sites.get(site, 0.0), 1.0 if passed else 0.0, site not in node.sites)
-    kbps = result.get("kbps")
+    kbps, floor = result.get("kbps"), result.get("kbps_min")
     if kbps is not None:
-        node.kbps_ewma = _ewma(node.kbps_ewma, float(kbps), not node.kbps_ewma)
+        node.kbps_ewma = _ewma(node.kbps_ewma, float(kbps), not speed_known(node))
+    elif floor is not None and speed_known(node) and node.kbps_ewma < floor:
+        # A quick small download proves "at least this fast": it can lift a low average
+        # (a throttled config that recovered) but never sets or lowers one.
+        node.kbps_ewma = _ewma(node.kbps_ewma, float(floor), False)
+    if speed_known(node) or kbps is not None:
         node.speed_kbps = int(node.kbps_ewma)
 
 
@@ -70,7 +82,7 @@ def score(node):
     if node.checks == 0:
         return 0.0
     lat = 1.0 / (1.0 + node.lat_ewma / 800.0) if node.lat_ewma else 0.5
-    spd = min(node.kbps_ewma / 4000.0, 1.0) if node.kbps_ewma else 0.3
+    spd = min(node.kbps_ewma / 4000.0, 1.0) if speed_known(node) else 0.15   # unmeasured < measured fast
     s = 0.5 * node.ok_ewma + 0.3 * _site_score(node) + 0.15 * lat + 0.05 * spd
     s *= 0.6 + 0.4 * min(node.checks / 4.0, 1.0)  # little history = less trust
     if youtube_broken(node):
