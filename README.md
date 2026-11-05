@@ -11,7 +11,7 @@ No server, no domain, no account. Clone it, double-click it, and it runs.
 Public V2Ray configs on Telegram and GitHub die within hours. Most of them don't work from your network at all. Juggler does the tedious part for you:
 
 ```
-30 Telegram channels ─┐                         a scored pool that is never reset
+41 Telegram channels ─┐                         a scored pool that is never reset
  (newest posts first) │                         ┌──────────────────────────────────────────────┐
 GitHub aggregators   ─┼─► parse ─► queue ─► explore │ every check updates rolling scores:          │
 your own URLs        ─┤   (every 15 min)   (90 s)   │ health · YouTube/Google/Instagram/Telegram · │
@@ -31,18 +31,19 @@ pasted by hand       ─┘                             │ latency · speed    
 - **Every protocol Xray can dial:** VLESS (REALITY / TLS, Vision), VMess, Trojan, Shadowsocks (AEAD and 2022), Hysteria2, WireGuard, SOCKS, HTTP. Transports: raw, ws, grpc, httpupgrade, xhttp, kcp.
 - **Resilient by design.** There is no reset moment. Every check adds evidence to a rolling score, one failed handshake never drops a config, and a config is retired only after repeated failures over 10+ minutes. Retired configs are retried later (30 min, 2 h, 6 h, 24 h). If your own internet drops, results are discarded instead of punishing the configs.
 - **The config in use is sticky.** A working config is never swapped for a "faster" one. It changes only after two failed checks in a row (the in-use config is checked with real traffic every 20 s), or after two downloads in a row (one every ~2 min) measure it below the minimum speed, and Xray is updated live, so open connections and videos keep going.
-- **Fresh configs first.** 30 curated Telegram channels are read three pages deep (about 60 posts each, newest first), and the big GitHub dumps fill the rest of the queue. New configs are explored in small batches every 90 s.
+- **Fresh configs first.** 41 curated Telegram channels are read three pages deep (about 60 posts each, newest first), and the big GitHub dumps fill the rest of the queue. New configs are explored in small batches every 90 s.
 - **Tested like real use.** Each config is checked with real requests to **YouTube, Google, Instagram and Telegram**, and how many of them load counts toward its Health. A config that answers one small request but can't load the real youtube.com page on a fresh connection is dropped, which catches DPI that kills connections after the first request. A failed check is retried once with a longer timeout before it counts. The YouTube page download is timed as well, so every config gets a speed reading, and a config that answers quickly but trickles data (a green ping, 0.1 Mbps) shows up as slow instead of looking fine.
 - **Measured honestly.** Every hour a sample of retired configs is re-tested with relaxed timeouts. The share that actually works (the false-negative rate) and the test bandwidth (MB/h) are shown in the dashboard.
 - **A minimum speed (500 kbps by default).** Configs measured slower than the dashboard's **Min speed** are kept and re-measured every 30 min, but never carry traffic, and the config in use is dropped once it measures below it. If every working config is slow, the fastest slow ones are still used rather than nothing. Set it to Off, 250 kbps, 500 kbps, 1, 2 or 3 Mbps.
 - **Ranked by reliability, then site coverage, then latency, then speed,** with flag emoji per exit country (they also render on Windows).
-- **One click to connect.** The big **Connect** button routes every Windows app through Juggler (it sets the Windows system proxy); press it again to restore your settings. A ring around it counts down to the next source fetch.
+- **One click to connect.** The big **Connect** button routes Windows apps through Juggler (it points the Windows system proxy at a proxy script Juggler serves); press it again to restore your settings. A ring around it counts down to the next source fetch.
 - **Hands-on when you want it.** Paste your own configs (they're never auto-deleted). **Test** any config or **Test all** and watch each row go Queued → Testing → ✓ 612 ms or ✗. **Test** also measures speed right after (✓ 612 ms · 2.4 Mbps, amber when below the minimum). Double-click a row to use it, or remove it with ×. Tick the checkboxes (shift+click selects a range, Esc clears) to **Test** or **Remove** many at once.
 - **Site check.** Type a site (`chatgpt.com`) and every config is tried on it. Each site gets its own tab showing which configs reach it and how fast.
 - **Never stuck when sources are blocked.** Each source is fetched **direct**, then through **Juggler's own proxy**, then through **Tor** (WebTunnel/obfs4 bridges you paste, plus built-in Snowflake/meek), then from the **last cached copy**.
 - **Direct-route whitelist.** Iranian sites (`geosite:ir`, `.ir`, `geoip:ir`) and your LAN skip the proxy. You can add domains, IPs, CIDRs or geosite categories from the dashboard.
 - **Phone support.** Your phone imports a subscription served on your Wi-Fi, with nodes renamed like `🇩🇪 DE · vless · 412ms · 3.1Mbps`.
-- **Clean shutdown.** The Windows system proxy is restored when you close Juggler (Ctrl+C or the window's ×). Xray and Tor never outlive the app. If Windows shuts down or Juggler is ended from Task Manager while connected, the proxy is restored the next time Juggler starts (see Troubleshooting).
+- **Your internet never depends on Juggler running.** The Windows system proxy is restored when you close Juggler (Ctrl+C or the window's ×), and Xray and Tor never outlive the app. If Juggler stops any other way (Windows shuts down, End task, a crash, a power cut), the proxy script simply can't load and Windows goes direct. The script also falls back to direct if Juggler's proxy stops answering mid-session.
+- **Locked to this PC.** The dashboard and its API only answer this machine, by IP address or `localhost`, so a website can't reach it by pointing its own name at 127.0.0.1 (DNS rebinding). Changes also need a header other websites can't send.
 
 ## Quick start
 
@@ -99,7 +100,7 @@ Turn **other VPNs off** while Juggler is running. Juggler measures which configs
 | Goal | How |
 |---|---|
 | Browser / any app | SOCKS5 `127.0.0.1:20808` or HTTP `127.0.0.1:20809` |
-| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy; press again to restore it). Juggler must run **on Windows** for this, not inside WSL. |
+| All Windows apps | Dashboard → the big **Connect** button (sets the Windows system proxy to Juggler's proxy script; press again to restore it). Browsers, Edge/Chrome, VS Code and other apps that follow the Windows proxy settings go through Juggler. Tools that only read a fixed proxy address (pip, Python, some command-line tools) don't: point those at `127.0.0.1:20809`. Juggler must run **on Windows** for this, not inside WSL. |
 | Phone (v2rayNG) | ☰ → *Subscription group setting* → **+** → URL `http://<PC-LAN-IP>:8765/sub` → *Update subscription*. Scan the QR code on the dashboard or in the terminal. **Use the IP, not a hostname:** v2rayNG only accepts plain `http` for private IPs. The Phone card shows when your phone last fetched and whether Windows Firewall lets it in. |
 | Phone through the PC | Set the phone's proxy to `<PC-LAN-IP>:20808` (SOCKS) or `:20809` (HTTP). |
 | Pick a specific config | **Use**, or double-click its row, pins it. **Back to auto** hands the choice back to Juggler, which keeps the current config while it works. |
@@ -134,7 +135,9 @@ Ports, intervals and test budgets are constants at the top of `juggler/paths.py`
 | Sources show `CACHE` | Every fetch path failed. Add working WebTunnel bridges so the Tor path can work. |
 | Tor stuck below 100% | The built-in bridges are blocked. Paste fresh WebTunnel bridges. Bridges whose domain resolves to `10.10.34.x` are DNS-poisoned and won't work. |
 | v2rayNG says "Failure" | Check the dashboard's Phone card. **"Firewall blocks phones on this Private network"** means Windows was only allowed on Public networks, so press **Allow phone access**. If it says the phone reached Juggler but there were no working configs, wait for the first test cycle. Also open the URL in the phone's browser: you should see a long block of text. Some office Wi-Fi networks block devices from reaching each other. |
-| No internet after Juggler closed or after a restart | Windows still points at Juggler's proxy (it can happen when Windows shuts down or Juggler is ended from Task Manager while connected). Start Juggler once, or turn off **Settings → Network & internet → Proxy → Use a proxy server**. |
+| No internet after Juggler closed or after a restart | Shouldn't happen any more: Windows goes direct when Juggler's proxy script can't load. If it does (for example a version before 1.7 was running), start Juggler once (it removes a leftover proxy even when it doesn't remember setting one), or turn off **Settings → Network & internet → Proxy → Use setup script** and **Use a proxy server**. |
+| Pip or a command-line tool ignores Juggler while connected | Connect uses a proxy script, and those tools only read a fixed proxy address. Set `HTTPS_PROXY=http://127.0.0.1:20809` for them. |
+| Extension says "HTTP 403" | Update the extension (1.2.0 or newer): Juggler now refuses changes from anything that doesn't send its header. |
 | Connect is greyed out | Juggler is running in WSL or on Linux. Start it on Windows (`Juggler.bat` or the Desktop shortcut); on Linux point apps at `127.0.0.1:20808`. |
 | `port 8765 busy` | Juggler is already running in another window. |
 
@@ -159,7 +162,7 @@ juggler/tester.py   YouTube liveness → real-use verify → speed, via one temp
 juggler/xray.py     config builders, validation (bisection), main instance + API
 juggler/engine.py   refresh loop, state, dashboard actions
 juggler/tor.py      Tor + lyrebird (WebTunnel / obfs4 / Snowflake / meek)
-juggler/sysproxy.py Windows system proxy with snapshot and restore
+juggler/sysproxy.py Windows system proxy: proxy script (PAC), snapshot and restore
 juggler/firewall.py Windows Firewall diagnosis + one-click (UAC) allow rule for phones
 juggler/procs.py    child processes die with the app (Windows Job Object)
 juggler/app.py      Flask routes, SSE log stream, QR codes, /sub

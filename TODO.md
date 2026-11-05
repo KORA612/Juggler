@@ -5,39 +5,6 @@ Each item: *problem → plan → cost / pushback → done when.*
 
 ---
 
-## P0 · The Windows proxy can stay set after Juggler stops
-
-**Problem.** After Connect, Windows points at `127.0.0.1:20809`. If Juggler stops without running its
-cleanup, the setting stays, and with Juggler not running there is no internet until it's reset by hand.
-Found 2026-10-21:
-- **Shutdown, restart and sign-out skip the cleanup.** The console handler in `run.py` is meant to get
-  `CTRL_SHUTDOWN_EVENT` / `CTRL_LOGOFF_EVENT`, but Windows doesn't send those to a console process that has
-  loaded `user32.dll`/`gdi32.dll`, and Juggler loads both (via `wininet` for the proxy refresh). Confirmed
-  in the running process's module list.
-- **End task, a crash or a power cut** skip it too.
-- Today the only repair is on the **next start** of Juggler (`Engine.start` restores it), which doesn't
-  help if you don't start it again.
-
-**Plan.** Two ways, pick one:
-- [ ] **A. Self-healing proxy script (recommended).** Connect sets `AutoConfigURL =
-  http://127.0.0.1:8765/proxy.pac?v=<time>` instead of a fixed `ProxyServer`. The script returns
-  `PROXY 127.0.0.1:20809; DIRECT` (whitelist, `.ir` and LAN → `DIRECT`). When Juggler isn't running the
-  script can't load and Windows goes direct, whatever the reason it stopped; mid-session the `; DIRECT`
-  fallback covers a dead proxy. Snapshot and restore `AutoConfigURL` along with the rest.
-  *Cost:* tools that read only the fixed proxy address (pip/Python `urllib`, some CLIs) stop going
-  through Juggler. Browsers, Edge/Chrome, VS Code and other Electron apps follow the script.
-- [ ] **B. Keep the fixed proxy and add cleanups.** While connected, register a `RunOnce` entry that
-  resets the proxy at next sign-in if it still points at Juggler (covers shutdown, restart, power cut),
-  plus a small watchdog outside Juggler's job object that resets it when the Juggler process disappears
-  (covers End task and crashes). Every app keeps following the proxy; more moving parts.
-- [ ] Either way: on start, remove a leftover `127.0.0.1:20809` proxy even when `state.json` says off
-  (the state file can be stale or shared between a Windows and a WSL run).
-
-**Done when.** Connect → shut Windows down → boot without Juggler: internet works. Connect → End task on
-Juggler: browsing works again within seconds.
-
----
-
 ## P1 · A stable phone connection: your own Cloudflare Worker + clean IPs
 
 **Problem.** The phone lives on the same public configs as the PC, which die within hours. Cloudflare
@@ -92,6 +59,15 @@ From the 2026-10-21 log:
 
 ## P1 · Testing and false positives
 
+- [ ] **Manual Test doesn't wait behind background jobs.** One scheduler thread runs every job in turn
+  (`engine.py` `_run_next`), so a Test click sits on "Queued" until the running explore/reserve/sample
+  batch finishes (a minute or more), then the full check (up to 60 s) and speed (up to 40 s).
+  *Plan:* run dashboard tests on their own worker thread with their own xray test port range; results
+  recorded under the existing lock; cap at ~10 configs per manual run.
+  *Cost:* ~60 lines + tests; a second short-lived xray (~20–40 MB) only while a manual test runs.
+  *Pushback:* a manual test can overlap a background batch, so more connections from one IP at once
+  (see the parallelism item below).
+  *Done when:* Test on an idle-looking dashboard shows Testing within ~1 s even mid-batch.
 - [ ] **Site-aware routing.** Route `youtube.com`/`googlevideo.com` via the config best at YouTube and
   `instagram.com`/`cdninstagram.com` via the best at Instagram (xray domain rules → separate balancers).
 - [ ] **"Reported broken" per config:** one click demotes it hard and logs why.
@@ -108,6 +84,33 @@ From the 2026-10-21 log:
 - [ ] **Self-maintaining channel list:** drop channels that yield nothing for 3 days; discover new ones from
   the `@handles` in config names and keep the productive ones.
 - [ ] **Research pass:** more collectors, aggregators and bots with web mirrors, measured by yield from Iran.
+
+---
+
+## P1 · Tor as an option, not only the fallback
+
+**Problem.** Tor is used only when no config works (or a source can't be fetched otherwise), it starts
+cold (minutes over Snowflake) exactly when it's needed, and there's no way to choose it.
+
+**Plan.**
+- [ ] **Route switch in the dashboard:** Auto (today) · Configs only · Tor only · Configs → Tor (Tor runs
+  *through* a working config: `Socks5Proxy 127.0.0.1:20811` in torrc, so the ISP never sees Tor and no
+  bridges are needed while any config works). xray already has a `tor` outbound (`xray.py` `build_main`);
+  each mode is a different routing table.
+- [ ] **Tor-only port** (e.g. SOCKS `127.0.0.1:20812`): always Tor, whatever the mode, for one browser
+  profile; everything else stays on the fast configs. Optionally per-site: a domain list that always goes
+  via Tor (same rule syntax as the whitelist).
+- [ ] **Warm Tor** when any Tor mode is on: start in the background, keep its cached consensus between
+  runs (reconsider `AvoidDiskWrites`), so switching is instant.
+- [ ] **Bridge health:** test each bridge once, keep the ones that bootstrap, prefer WebTunnel → obfs4 →
+  Snowflake → meek.
+
+**Cost / pushback.** Tor is slow (~1–3 Mbps, high latency), YouTube plays badly, Google and others show
+CAPTCHAs to Tor exits: opt-in, never the default. A warm Tor costs ~50 MB RAM and a little background
+traffic. Configs → Tor still needs one working config.
+
+**Done when.** Switching to Tor only or Configs → Tor routes traffic through Tor within seconds (no
+cold bootstrap), the Tor-only port works while the rest uses configs, and Auto behaves as today.
 
 ---
 

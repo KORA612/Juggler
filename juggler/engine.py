@@ -145,7 +145,7 @@ class Engine:
     # ---------- persistence ----------
 
     def _ensure_files(self):
-        if not os.path.exists(SOURCES_TXT) or read_lines(SOURCES_TXT) == sources.LEGACY_DEFAULT:
+        if not os.path.exists(SOURCES_TXT) or read_lines(SOURCES_TXT) in sources.LEGACY_DEFAULTS:
             write_lines(SOURCES_TXT, sources.DEFAULT_SOURCES, SOURCES_HEADER)
         if not os.path.exists(WHITELIST_TXT):
             write_lines(WHITELIST_TXT, DEFAULT_WHITELIST, WHITELIST_HEADER)
@@ -187,9 +187,14 @@ class Engine:
 
     def start(self):
         sp = self.state["sysproxy"]
-        if sp.get("on") and sysproxy.is_ours(HTTP_PORT):
-            log.warn("PROXY", "restoring system proxy left on by a previous crash")
-            self.set_sysproxy(False)
+        if sysproxy.SUPPORTED and sysproxy.is_ours(HTTP_PORT):
+            if sp.get("on"):
+                log.warn("PROXY", "restoring system proxy left on by a previous crash")
+                self.set_sysproxy(False)
+            elif sysproxy.clear_leftover(HTTP_PORT):
+                # state.json says off (lost, stale, or shared with a WSL run) but Windows
+                # still points at Juggler: clear it rather than trust the file.
+                log.warn("PROXY", "removed a leftover Juggler system proxy")
         if not self.tor.available():
             log.warn("TOR", "Tor not installed; the Tor fallback is off")
         warm = sorted(self.pool.values(), key=scoring.score, reverse=True)[:ACTIVE]
@@ -888,11 +893,12 @@ class Engine:
         if on:
             if not sp.get("on"):
                 sp["saved"] = sysproxy.read()
-            sysproxy.enable(HTTP_PORT, sysproxy.bypass_list(read_lines(WHITELIST_TXT)))
+            sysproxy.enable()
             sp["on"] = True
-            log.ok("PROXY", f"Windows system proxy → 127.0.0.1:{HTTP_PORT}")
+            log.ok("PROXY", f"Windows system proxy → 127.0.0.1:{HTTP_PORT} (via proxy script)")
         else:
-            saved = sp.get("saved") or {"ProxyEnable": 0}
+            # Snapshots taken before the proxy script have no AutoConfigURL: remove ours then.
+            saved = {"AutoConfigURL": None, **(sp.get("saved") or {"ProxyEnable": 0})}
             sysproxy.write(saved)
             sp["on"] = False
             log.ok("PROXY", "Windows system proxy restored")
@@ -912,7 +918,7 @@ class Engine:
         log.ok(TAG, f"whitelist saved · {len(entries)} entries")
         self.main.apply(self.active, entries, self.tor.available(), self.primary)
         if self.state["sysproxy"].get("on"):
-            sysproxy.set_bypass(sysproxy.bypass_list(entries))
+            sysproxy.reload()
         return True, ""
 
     def text_file(self, which):
@@ -946,6 +952,9 @@ class Engine:
             ranked = scoring.rank(self.pool.values())
             rest = sorted((n for n in self.pool.values() if n not in ranked), key=scoring.score, reverse=True)
             return ranked, rest
+
+    def pac(self):
+        return sysproxy.pac(HTTP_PORT, sysproxy.bypass_list(read_lines(WHITELIST_TXT)))
 
     def subscription(self, client_ip=""):
         ranked, _ = self._ranked_view()

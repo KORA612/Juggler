@@ -1,9 +1,18 @@
 """Windows system proxy (WinINet / Internet Settings). No-op elsewhere.
 
+Connect points Windows at a proxy script (PAC) served by Juggler, not at a fixed proxy
+address. If Juggler stops for any reason (shutdown, End task, crash, power cut) the script
+can't load and Windows goes direct, so the internet never depends on Juggler running.
+While it runs, the script answers "PROXY 127.0.0.1:<http>; DIRECT", so a dead proxy also
+falls back to direct.
+
 The user's original settings are snapshotted to state before the first change
 and restored on exit, on console close, and on the next start after a crash.
 """
-from .paths import IS_WIN
+import json
+import time
+
+from .paths import IS_WIN, WEB_PORT
 
 KEY = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 SUPPORTED = IS_WIN
@@ -22,7 +31,7 @@ def read():
     import winreg
     out = {}
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, KEY) as k:
-        for name in ("ProxyEnable", "ProxyServer", "ProxyOverride"):
+        for name in ("ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL"):
             try:
                 out[name] = winreg.QueryValueEx(k, name)[0]
             except FileNotFoundError:
@@ -48,18 +57,57 @@ def write(values):
     _refresh()
 
 
-def is_ours(port):
+PAC_BASE = f"http://127.0.0.1:{WEB_PORT}/proxy.pac"
+
+
+def is_ours(port, cur=None):
+    """Windows currently goes through Juggler: our proxy script, or the fixed address
+    that versions before the script set."""
+    cur = read() if cur is None else cur
+    if not cur:
+        return False
+    if str(cur.get("AutoConfigURL") or "").startswith(PAC_BASE):
+        return True
+    return bool(cur.get("ProxyEnable") and cur.get("ProxyServer") == f"127.0.0.1:{port}")
+
+
+def enable():
+    """Point Windows at the proxy script. A new ?v= on every call makes Windows and the
+    browsers fetch it again instead of using a cached copy."""
+    write({"ProxyEnable": 0, "AutoConfigURL": f"{PAC_BASE}?v={int(time.time())}"})
+
+
+def reload():
+    """The script changed (whitelist): make Windows fetch it again."""
+    enable()
+
+
+def clear_leftover(port):
+    """Undo our proxy when there is no snapshot to restore (state lost or stale)."""
     cur = read()
-    return bool(cur and cur.get("ProxyEnable") and cur.get("ProxyServer") == f"127.0.0.1:{port}")
+    if not is_ours(port, cur):
+        return False
+    values = {}
+    if str(cur.get("AutoConfigURL") or "").startswith(PAC_BASE):
+        values["AutoConfigURL"] = None
+    if cur.get("ProxyServer") == f"127.0.0.1:{port}":
+        values["ProxyEnable"] = 0
+    write(values)
+    return True
 
 
-def enable(port, bypass):
-    write({"ProxyEnable": 1, "ProxyServer": f"127.0.0.1:{port}",
-           "ProxyOverride": ";".join(bypass + ["<local>"])})
-
-
-def set_bypass(bypass):
-    write({"ProxyOverride": ";".join(bypass + ["<local>"])})
+def pac(port, bypass):
+    """The proxy script: whitelist, plain names and the LAN go direct, the rest through
+    Juggler, and direct if Juggler's proxy doesn't answer."""
+    patterns = json.dumps(["localhost", "127.*", *bypass])
+    return (
+        "function FindProxyForURL(url, host) {\n"
+        "  if (isPlainHostName(host)) return \"DIRECT\";\n"
+        f"  var direct = {patterns};\n"
+        "  for (var i = 0; i < direct.length; i++)\n"
+        "    if (shExpMatch(host, direct[i])) return \"DIRECT\";\n"
+        f"  return \"PROXY 127.0.0.1:{port}; DIRECT\";\n"
+        "}\n")
 
 
 def bypass_list(whitelist):

@@ -377,3 +377,26 @@ def test_a_selection_is_removed_at_once(eng):
     assert eng.remove([a.id, b.id, "gone"]) == 2
     assert set(eng.pool) == {c.id} and eng.state["pinned"] is None
     assert eng.remove(["gone"]) == 0
+
+
+def test_start_clears_leftover_proxy_even_when_state_says_off(eng, monkeypatch):
+    from juggler import sysproxy
+    cleared = []
+    monkeypatch.setattr(sysproxy, "SUPPORTED", True)
+    monkeypatch.setattr(sysproxy, "is_ours", lambda port, cur=None: True)
+    monkeypatch.setattr(sysproxy, "clear_leftover", lambda port: cleared.append(port) or True)
+    monkeypatch.setattr(engine.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda s: None})())
+    eng.main.apply = lambda *a, **k: None
+    eng.state["sysproxy"] = {"on": False, "saved": None}
+    eng.start()
+    assert cleared == [engine.HTTP_PORT]
+
+
+def test_disconnect_removes_script_even_with_an_old_snapshot(eng, monkeypatch):
+    from juggler import sysproxy
+    written = []
+    monkeypatch.setattr(sysproxy, "SUPPORTED", True)
+    monkeypatch.setattr(sysproxy, "write", written.append)
+    eng.state["sysproxy"] = {"on": True, "saved": {"ProxyEnable": 0, "ProxyServer": None, "ProxyOverride": None}}
+    assert eng.set_sysproxy(False) == (True, "")
+    assert written[-1]["AutoConfigURL"] is None and written[-1]["ProxyEnable"] == 0
