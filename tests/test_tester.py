@@ -10,17 +10,17 @@ def _raise(code):
 
 
 def test_site_answering_with_a_client_error_is_still_reachable(monkeypatch):
-    monkeypatch.setattr(tester, "_get", _raise(403))
+    monkeypatch.setattr(tester, "_timed", _raise(403))
     assert tester._site(0, None, False, "https://x.com")["ok"] is True
-    monkeypatch.setattr(tester, "_get", _raise(502))
+    monkeypatch.setattr(tester, "_timed", _raise(502))
     assert tester._site(0, None, False, "https://x.com")["ok"] is False
 
 
 def test_site_that_never_answers_is_unreachable(monkeypatch):
     def get(*a, **kw):
         raise TimeoutError
-    monkeypatch.setattr(tester, "_get", get)
-    assert tester._site(0, None, False, "https://x.com") == {"ok": False, "ms": None}
+    monkeypatch.setattr(tester, "_timed", get)
+    assert tester._site(0, None, False, "https://x.com") == {"ok": False, "ms": None, "kbps": None}
 
 
 def test_a_crawling_download_is_a_measurement_a_quick_one_only_a_lower_bound():
@@ -103,3 +103,18 @@ def test_timed_download_through_a_real_socket():
         assert "kbps_min" in tester.reading(got, secs, capped)
     finally:
         fast.close()
+
+
+def test_site_check_times_the_answer_and_the_download():
+    slow = _Throttled(400_000, 8_000, 0.25)         # ~256 kbps
+    try:
+        r = tester._site(slow.port, None, False, "http://example.test/")
+        assert r["ok"] and r["ms"] < 1000 and 100 < r["kbps"] < 400
+    finally:
+        slow.close()
+    tiny = _Throttled(2_000, 2_000, 0)
+    try:
+        r = tester._site(tiny.port, None, False, "http://example.test/")
+        assert r["ok"] and r["kbps"] is None         # too small a page to time
+    finally:
+        tiny.close()

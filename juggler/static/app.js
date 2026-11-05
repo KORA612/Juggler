@@ -140,12 +140,15 @@ const speedColor = (k) => (k >= 3000 ? "var(--accent)" : k >= 1000 ? "var(--ambe
 
 function sortedNodes() {
   const site = selectedSite();
-  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _health: -n.health,
-    _site: site && typeof site.results[n.id] === "number" ? site.results[n.id] : Infinity }));
-  const k = { health: "_health", site: "_site" }[sort.key] || sort.key;
+  const arr = S.nodes.map((n, i) => {
+    const r = site && site.results[n.id];
+    return { ...n, rank: i + 1, _health: -n.health, _site: r ? r.ms : Infinity,
+             _sspeed: r && r.kbps != null ? r.kbps : 0 };
+  });
+  const k = { health: "_health", site: "_site", ...(site ? { speed_kbps: "_sspeed" } : {}) }[sort.key] || sort.key;
   arr.sort((a, b) => {
     let x = a[k], y = b[k];
-    if (k === "speed_kbps") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
+    if (k === "speed_kbps" || k === "_sspeed") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
     if (k === "country") { x = regionName(x); y = regionName(y); }
     return (x > y ? 1 : x < y ? -1 : 0) * sort.dir;
   });
@@ -175,11 +178,18 @@ const selectedSite = () => (S?.sitechecks || []).find((h) => h.host === siteSel)
 const sitesActive = () => (S?.sitechecks || []).some((h) => h.state !== "done");
 
 function siteCell(n, site) {
-  const ms = site.results[n.id];
-  if (typeof ms === "number") return `<span class="reach ok">✓ ${ms} ms</span>`;
-  if (ms === null) return `<span class="reach bad" title="Didn't answer through this config">✗</span>`;
+  const r = site.results[n.id];
+  if (r) return `<span class="reach ok" title="Time to ${esc(site.host)}'s answer">✓ ${r.ms} ms</span>`;
+  if (r === null) return `<span class="reach bad" title="Didn't answer through this config">✗</span>`;
   return site.state === "done" ? `<span class="reach na" title="Added after this check">–</span>`
     : `<span class="spin reach na" style="--phase:-${Date.now() % 1600}ms"></span>`;
+}
+
+function siteSpeed(n, site) {
+  const r = site.results[n.id];
+  if (!r) return '<span class="metric na">–</span>';
+  if (r.kbps == null) return `<span class="metric na" title="${esc(site.host)}'s page is too small to time">–</span>`;
+  return `<span class="metric" style="color:${speedColor(r.kbps)}">${fmtSpeed(r.kbps) || "0 kbps"}</span>`;
 }
 
 // One tab per checked site (newest first). Only re-rendered when it changes, so hover
@@ -203,6 +213,9 @@ function renderTabs() {
   const site = selectedSite();
   $("#node-table").classList.toggle("site-mode", !!site);
   if (site) { $("#site-col").textContent = site.host; $("#site-col").title = site.url; }
+  const spCol = $("th[data-sort=speed_kbps]");
+  spCol.textContent = site ? "Site speed" : "Speed";
+  spCol.title = site ? `Download speed from ${site.host} through each config` : "";
   const rerun = $("#site-rerun");
   rerun.hidden = !site;
   rerun.disabled = !!site && site.state !== "done";
@@ -250,7 +263,7 @@ function renderNodes() {
       <td class="num c-site">${site ? siteCell(n, site) : ""}</td>
       <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
       <td class="num c-ping">${n.ping_ms > 0 ? `<span class="metric" style="color:${pingColor(n.ping_ms)}">${n.ping_ms} ms</span>` : '<span class="metric na">–</span>'}</td>
-      <td class="num">${sp || n.speed_kbps === 0 ? `<span class="metric${n.slow ? " slow" : ""}" style="color:${speedColor(n.speed_kbps)}"${n.slow ? ` title="Below your ${fmtSpeed(S.min_kbps)} minimum: kept and re-measured, not used"` : ""}>${sp || "0 kbps"}</span>` : '<span class="metric na">–</span>'}</td>
+      <td class="num">${site ? siteSpeed(n, site) : sp || n.speed_kbps === 0 ? `<span class="metric${n.slow ? " slow" : ""}" style="color:${speedColor(n.speed_kbps)}"${n.slow ? ` title="Below your ${fmtSpeed(S.min_kbps)} minimum: kept and re-measured, not used"` : ""}>${sp || "0 kbps"}</span>` : '<span class="metric na">–</span>'}</td>
       <td><div class="acts">
         ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
         <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>

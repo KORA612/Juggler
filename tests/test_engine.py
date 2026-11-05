@@ -222,7 +222,7 @@ def test_site_check_reports_reach_per_config_without_touching_health(eng, monkey
     e = eng.snapshot()["sitechecks"][0]
     assert calls == [("site", "https://x.com/home")]
     assert (e["state"], e["reach"], e["total"]) == ("done", 1, 3)
-    assert e["results"] == {a.id: 312, b.id: None, c.id: None}
+    assert e["results"] == {a.id: {"ms": 312, "kbps": None}, b.id: None, c.id: None}
     assert [(n.ok_ewma, n.checks) for n in (a, b, c)] == before
 
 
@@ -329,3 +329,22 @@ def test_a_test_that_measures_slow_says_so(eng, monkeypatch):
 def test_a_big_complete_download_is_a_measurement():
     from juggler import tester
     assert tester.reading(3_000_000, 1.5, False) == {"kbps": 16000}
+
+
+def test_site_check_keeps_latency_and_speed_per_config(eng, monkeypatch):
+    a, b = proven(eng, 1), proven(eng, 2)
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget, url:
+                        {a.id: {"ok": True, "ms": 420, "kbps": 1800}, b.id: {"ok": False, "ms": None}})
+    ok, host = eng.site_check("chatgpt.com")
+    eng._job_site_check(host)
+    h = eng.snapshot()["sitechecks"][0]
+    assert h["results"] == {a.id: {"ms": 420, "kbps": 1800}, b.id: None} and h["reach"] == 1
+
+
+def test_site_results_saved_by_older_versions_still_load(eng, tmp_path):
+    import json
+    eng.state["sitechecks"] = [{"url": "https://x.com", "host": "x.com", "at": 1, "state": "done",
+                                "results": {"n1": 512, "n2": None}, "total": 2, "reach": 1}]
+    eng.save(force=True)
+    again = engine.Engine()
+    assert again.state["sitechecks"][0]["results"] == {"n1": {"ms": 512, "kbps": None}, "n2": None}

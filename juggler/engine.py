@@ -165,6 +165,8 @@ class Engine:
         for h in self.state["sitechecks"]:          # a check cut short by a restart
             if h.get("state") != "done":
                 h.update(state="done", interrupted=True)
+            h["results"] = {k: {"ms": v, "kbps": None} if isinstance(v, (int, float)) else v
+                            for k, v in h.get("results", {}).items()}     # before 1.6.7: ms only
         for d in saved.get("pool", saved.get("nodes", [])):
             n = links.parse(d.get("link", ""))
             if n:
@@ -545,8 +547,8 @@ class Engine:
                              if r.get("ok") else ""))
 
     def _job_site_check(self, host):
-        """Can each config reach a site the user named? Informational only: it never
-        changes Health or ranking."""
+        """Can each config reach a site the user named, how fast does it answer and how
+        fast does it download? Informational only: it never changes Health or ranking."""
         with self.lock:
             entry = next((h for h in self.state["sitechecks"] if h["host"] == host), None)
             nodes = list(self.pool.values())
@@ -564,10 +566,10 @@ class Engine:
                     entry.update(state="done", offline=True, results={}, reach=0, at=time.time())
                 return
             with self.lock:
-                entry["results"].update({n.id: res[n.id]["ms"] if res.get(n.id, {}).get("ok") else None
-                                         for n in part})
+                entry["results"].update({n.id: {"ms": res[n.id]["ms"], "kbps": res[n.id].get("kbps")}
+                                         if res.get(n.id, {}).get("ok") else None for n in part})
         with self.lock:
-            reach = sum(1 for ms in entry["results"].values() if ms is not None)
+            reach = sum(1 for r in entry["results"].values() if r is not None)
             entry.update(state="done", reach=reach, at=time.time())
         log.info(TAG, f"site check {host} · {reach}/{len(nodes)} configs reach it")
         self.save(force=True)

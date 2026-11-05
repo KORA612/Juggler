@@ -8,6 +8,7 @@ check(nodes, "full")    quick, then on a *fresh* connection: ~64 KB of the real
                         Instagram and Telegram, and the exit country. The page download
                         is timed too, so every full check gives a speed reading for free.
 check(nodes, "speed")   sustained download for a few seconds, timed from the headers.
+check(nodes, "site")    a site you named: time to its answer, then up to 256 KB of it.
 
 Speed readings come in two kinds. {"kbps": x} is a real measurement: the download ran
 into its time limit (the link was the bottleneck) or crawled for SLOW_BODY_S. A fast
@@ -46,6 +47,7 @@ SPEED_URLS = ("https://speed.cloudflare.com/__down?bytes={n}",
 QUICK_TIMEOUT, RETRY_TIMEOUT = 6, 12          # seconds; relaxed mode uses 12 / 18
 VERIFY_BYTES, SITE_BYTES = 64_000, 16_000
 PAGE_TIMEOUT = 10
+SITE_SPEED_BYTES, SITE_SPEED_S, SITE_SPEED_MIN = 256_000, 4, 32_000   # smaller pages: no speed
 SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # cap the cost of a sustained test
 SLOW_BODY_S = 2.0      # a body that takes this long is a real (slow) reading, not slow start
 EXACT_BYTES = 1_000_000   # past this much, slow start no longer dominates: a measurement
@@ -232,17 +234,22 @@ def _speed(port, node, relaxed):
 
 
 def _site(port, node, relaxed, url):
-    """Does `url` answer through this config? Any HTTP status below 500 counts: a 403
-    or a login wall still means the site is reachable. -> {"ok", "ms" to first answer}"""
+    """Does `url` answer through this config, how fast, and how quickly does it download?
+    Any HTTP status below 500 counts: a 403 or a login wall still means the site is
+    reachable. -> {"ok", "ms" to its answer, "kbps"? (None for a page too small to tell)}"""
     t = time.perf_counter()
     try:
-        status, _ = _get(port, url, 1024, PAGE_TIMEOUT)
+        status, got, secs, capped = _timed(port, url, SITE_SPEED_BYTES, PAGE_TIMEOUT, SITE_SPEED_S)
     except urllib.error.HTTPError as e:
-        status = e.code
+        ms = int((time.perf_counter() - t) * 1000)
+        return {"ok": e.code < 500, "ms": ms if e.code < 500 else None, "kbps": None}
     except Exception:  # noqa: BLE001
-        return {"ok": False, "ms": None}
-    ms = int((time.perf_counter() - t) * 1000)
-    return {"ok": status < 500, "ms": ms if status < 500 else None}
+        return {"ok": False, "ms": None, "kbps": None}
+    ms = int((time.perf_counter() - t - secs) * 1000)
+    if status >= 500:
+        return {"ok": False, "ms": None, "kbps": None}
+    r = reading(got, secs, capped) if got >= SITE_SPEED_MIN or capped else {}
+    return {"ok": True, "ms": ms, "kbps": r.get("kbps", r.get("kbps_min"))}
 
 
 KINDS = {"quick": _quick, "full": _full, "speed": _speed, "site": _site}
