@@ -77,10 +77,14 @@ def create_app(engine):
     def sitecheck_forget():
         return jsonify(ok=engine.site_forget(body().get("host", "")))
 
+    def ids():
+        b = body()
+        return b.get("ids") if isinstance(b.get("ids"), list) else [b.get("id", "")]
+
     @app.post("/api/test")
-    def test_one():
-        ok = engine.test(body().get("id", ""))
-        return jsonify(ok=ok, msg="testing…" if ok else "unknown config"), (200 if ok else 400)
+    def test_some():
+        n = engine.test(ids())
+        return jsonify(ok=bool(n), count=n, msg=f"testing {n}…" if n else "nothing to test"), (200 if n else 400)
 
     @app.post("/api/test_all")
     def test_all():
@@ -97,8 +101,8 @@ def create_app(engine):
 
     @app.post("/api/remove")
     def remove():
-        ok = engine.remove(body().get("id", ""))
-        return jsonify(ok=ok), (200 if ok else 400)
+        n = engine.remove(ids())
+        return jsonify(ok=bool(n), count=n), (200 if n else 400)
 
     @app.get("/api/whitelist")
     def whitelist_get():

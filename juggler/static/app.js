@@ -231,6 +231,40 @@ function renderTestAll() {
   b.innerHTML = left > 0 && all.length > 1 ? `<span class="spin"></span>Testing ${all.length - left}/${all.length}` : "Test all";
 }
 
+// ---------- selection: checkboxes, shift+click for a range ----------
+const selected = new Set();
+let selAnchor = null;      // the last row clicked, the start of a shift+click range
+let bulkArm = 0;           // Remove takes a second click, like the row ×
+
+function selectRange(id, on) {
+  const ids = sortedNodes().map((n) => n.id);
+  const a = ids.indexOf(selAnchor), b = ids.indexOf(id);
+  const range = a < 0 || b < 0 ? [id] : ids.slice(Math.min(a, b), Math.max(a, b) + 1);
+  range.forEach((x) => (on ? selected.add(x) : selected.delete(x)));
+}
+function toggleSel(id, shift) {
+  const on = !selected.has(id);
+  if (shift && selAnchor) selectRange(id, on);
+  else on ? selected.add(id) : selected.delete(id);
+  selAnchor = id;
+  renderNodes();
+}
+function clearSel() { selected.clear(); selAnchor = null; bulkArm = 0; renderNodes(); }
+
+function renderBulk() {
+  const ids = new Set(S.nodes.map((n) => n.id));
+  [...selected].forEach((x) => { if (!ids.has(x)) selected.delete(x); });
+  const n = selected.size;
+  $("#bulk").hidden = n === 0;
+  $("#bulk-n").textContent = `${n} selected`;
+  const rm = $("#bulk-remove"), armed = Date.now() < bulkArm;
+  rm.classList.toggle("armed", armed);
+  rm.textContent = armed ? `Click again to remove ${n}` : "Remove";
+  const all = $("#sel-all");
+  all.checked = n > 0 && n === S.nodes.length;
+  all.indeterminate = n > 0 && n < S.nodes.length;
+}
+
 // Removing takes a second click, so a stray click next to Share does nothing.
 // The pending state lives here because the table re-renders on every poll.
 let removeArm = { id: null, until: 0 };
@@ -242,6 +276,7 @@ function removeBtn(n) {
 
 function renderNodes() {
   renderTestAll();
+  renderBulk();
   const site = selectedSite();
   $("#node-count").textContent = S.nodes.length;
   $("#nodes-empty").hidden = S.nodes.length > 0;
@@ -256,7 +291,8 @@ function renderNodes() {
     const rel = n.health ?? 0;
     const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
     const t = testView(S.tests?.[n.id]);
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}${n.eligible && !n.active ? ' title="Double-click to use this config"' : ""}>
+    return `<tr class="${selected.has(n.id) ? "selected " : ""}${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}${n.eligible && !n.active ? ' title="Double-click to use this config"' : ""}>
+      <td class="sel"><input type="checkbox" data-sel${selected.has(n.id) ? " checked" : ""} aria-label="Select"></td>
       <td class="rank">${n.rank}</td>
       <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
       <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
@@ -402,6 +438,28 @@ $("#add-save").onclick = async () => {
     toast(r.msg); $("#add-text").value = ""; $("#add-modal").hidden = true; setTimeout(poll, 6000);
   } catch (e) { toast(e.message, true); }
 };
+$("#sel-all").onclick = (ev) => {
+  if (ev.target.checked) { S.nodes.forEach((n) => selected.add(n.id)); renderNodes(); } else clearSel();
+};
+$("#bulk-clear").onclick = clearSel;
+$("#bulk-test").onclick = async () => {
+  try {
+    const r = await api("/api/test", "POST", { ids: [...selected] });
+    toast(r.count > 10 ? `Testing ${r.count} (speed is measured for up to 10 at a time)` : `Testing ${r.count}`);
+    poll();
+  } catch (e) { toast(e.message, true); }
+};
+$("#bulk-remove").onclick = async () => {
+  if (Date.now() >= bulkArm) {
+    bulkArm = Date.now() + 3000;
+    renderBulk();
+    setTimeout(() => { bulkArm = 0; if (S) renderBulk(); }, 3000);
+    return;
+  }
+  bulkArm = 0;
+  try { const r = await api("/api/remove", "POST", { ids: [...selected] }); toast(`Removed ${r.count}`); clearSel(); poll(); }
+  catch (e) { toast(e.message, true); }
+};
 $("#auto").onclick = async () => { await api("/api/pin", "POST", { id: null }); toast("Back to automatic selection"); poll(); };
 
 document.querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => {
@@ -429,11 +487,16 @@ function rowTap(ev) {
   if (!n.eligible) { toast("This config isn't working right now", true); return; }
   useConfig(n);
 }
-$("#nodes").onmousedown = (ev) => {          // a double-click shouldn't select the row's text
-  if (ev.detail > 1 && !ev.target.closest("button")) ev.preventDefault();
+$("#nodes").onmousedown = (ev) => {          // a double- or shift+click shouldn't select the row's text
+  if ((ev.detail > 1 || ev.shiftKey) && !ev.target.closest("button, input")) ev.preventDefault();
 };
 
 $("#nodes").onclick = async (ev) => {
+  const tr = ev.target.closest("tr[data-id]");
+  if (tr && (ev.target.closest("input[data-sel]") || (ev.shiftKey && !ev.target.closest("button")))) {
+    toggleSel(tr.dataset.id, ev.shiftKey);
+    return;
+  }
   const btn = ev.target.closest("button[data-act]");
   if (!btn) { rowTap(ev); return; }
   const n = S.nodes.find((x) => x.id === btn.closest("tr").dataset.id);
@@ -443,7 +506,7 @@ $("#nodes").onclick = async (ev) => {
   if (btn.dataset.act === "test") {
     if (S.tests?.[n.id] && S.tests[n.id].state !== "done") return;
     btn.classList.add("testing"); btn.innerHTML = '<span class="spin"></span>Queued';
-    try { await api("/api/test", "POST", { id: n.id }); poll(); } catch (e) { toast(e.message, true); }
+    try { await api("/api/test", "POST", { ids: [n.id] }); poll(); } catch (e) { toast(e.message, true); }
   }
   if (btn.dataset.act === "remove") {
     if (removeArm.id !== n.id || Date.now() >= removeArm.until) {
@@ -453,7 +516,7 @@ $("#nodes").onclick = async (ev) => {
       return;
     }
     removeArm = { id: null, until: 0 };
-    try { await api("/api/remove", "POST", { id: n.id }); toast(`Removed ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
+    try { await api("/api/remove", "POST", { ids: [n.id] }); selected.delete(n.id); toast(`Removed ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
   }
   if (btn.dataset.act === "use") useConfig(n);
 };
@@ -477,7 +540,12 @@ function openModal(title, link) {
 }
 $("#modal-close").onclick = () => ($("#modal").hidden = true);
 $("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").hidden = true; };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#modal").hidden = true; $("#add-modal").hidden = true; } });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = !$("#modal").hidden || !$("#add-modal").hidden;
+  $("#modal").hidden = true; $("#add-modal").hidden = true;
+  if (!open && selected.size) clearSel();
+});
 
 // ---------- whitelist ----------
 let WL = [];

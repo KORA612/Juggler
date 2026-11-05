@@ -49,10 +49,10 @@
           </svg>
           <span class="shield-text"><b>Safe mode</b><small id="safemode-state">On</small></span>
         </button>
-        <label class="shield floor" title="Configs measured slower than this are kept and re-measured, but not used">
+        <div class="shield floor" title="Configs measured slower than this are kept and re-measured, but not used">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-6"/></svg>
           <span class="shield-text"><b>Min speed</b><select id="minspeed" aria-label="Minimum speed"></select></span>
-        </label>
+        </div>
       </div>
     </div>
     <div class="hero-side">
@@ -86,6 +86,12 @@
         <h2>Working configs <span class="count" id="node-count">0</span></h2>
         <div class="head-actions">
           <span class="hint" id="balancer-hint">Auto · best score, sticky</span>
+          <span class="bulk" id="bulk" hidden>
+            <span class="bulk-n" id="bulk-n"></span>
+            <button class="btn ghost small" id="bulk-test">Test</button>
+            <button class="btn ghost small danger" id="bulk-remove">Remove</button>
+            <button class="btn ghost small" id="bulk-clear" title="Clear the selection (Esc)">Clear</button>
+          </span>
           <button class="btn ghost small" id="auto" hidden>Back to auto</button>
           <button class="btn ghost small" id="site-rerun" hidden>↻ Check again</button>
           <button class="btn ghost small" id="add-open">+ Add configs</button>
@@ -101,6 +107,7 @@
       <div class="table-wrap"><div class="table-scroll">
         <table id="node-table">
           <thead><tr>
+            <th class="sel"><input type="checkbox" id="sel-all" aria-label="Select all" title="Select all (shift+click a row to select a range)"></th>
             <th data-sort="rank">#</th>
             <th data-sort="country">Location</th>
             <th data-sort="proto">Protocol</th>

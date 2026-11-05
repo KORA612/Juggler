@@ -770,13 +770,17 @@ class Engine:
         self.wake.set()
         return True
 
-    def test(self, node_id):
-        if node_id not in self.pool:
-            return False
+    def test(self, ids):
+        """Test one config or a selection (a list of ids). -> how many were queued."""
+        ids = [ids] if isinstance(ids, str) else list(ids or [])
         with self.lock:
-            self.tests[node_id] = {"state": "queued", "at": time.time()}
-        self.request("test", [node_id])
-        return True
+            ids = [i for i in dict.fromkeys(ids) if i in self.pool
+                   and self.tests.get(i, {}).get("state") in (None, "done")]
+            now = time.time()
+            self.tests.update({i: {"state": "queued", "at": now} for i in ids})
+        if ids:
+            self.request("test", ids)
+        return len(ids)
 
     def test_all(self):
         with self.lock:
@@ -824,21 +828,29 @@ class Engine:
             self.request("manual", list(nodes.values()))
         return len(found), len(nodes)
 
-    def remove(self, node_id):
+    def remove(self, ids):
+        """Remove one config or a selection (a list of ids). -> how many were removed."""
+        ids = [ids] if isinstance(ids, str) else list(ids or [])
+        gone = []
         with self.lock:
-            n = self.pool.get(node_id)
-            if n is None:
-                return False
-            if self.state.get("pinned") == node_id:
-                self.state["pinned"] = None
-            del self.pool[node_id]
-            # Just out of the pool, not retired: if a source still lists it, the next
-            # fetch may queue it again like any other config.
-            self.state["dead"].pop(node_id, None)
-        log.info(TAG, f"removed {scoring.label(n)}")
+            for node_id in dict.fromkeys(ids):
+                n = self.pool.pop(node_id, None)
+                if n is None:
+                    continue
+                if self.state.get("pinned") == node_id:
+                    self.state["pinned"] = None
+                # Just out of the pool, not retired: if a source still lists it, the next
+                # fetch may queue it again like any other config.
+                self.state["dead"].pop(node_id, None)
+                gone.append(n)
+        if not gone:
+            return 0
+        log.info(TAG, f"removed {scoring.label(gone[0])}" if len(gone) == 1 else
+                 f"removed {len(gone)} configs: " + ", ".join(scoring.label(n) for n in gone[:4])
+                 + (" …" if len(gone) > 4 else ""))
         self._settle()
         self.save(force=True)
-        return True
+        return len(gone)
 
     SPEED_FLOORS = (0, 250, 500, 1000, 2000, 3000)
 

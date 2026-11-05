@@ -348,3 +348,32 @@ def test_site_results_saved_by_older_versions_still_load(eng, tmp_path):
     eng.save(force=True)
     again = engine.Engine()
     assert again.state["sitechecks"][0]["results"] == {"n1": {"ms": 512, "kbps": None}, "n2": None}
+
+
+def test_a_selection_is_tested_together_and_busy_ones_are_skipped(eng, monkeypatch):
+    a, b, c = proven(eng, 1), proven(eng, 2), proven(eng, 3)
+    jobs = []
+    monkeypatch.setattr(eng, "request", lambda name, *arg: jobs.append((name, arg)))
+    assert eng.test([a.id, b.id, "gone", a.id]) == 2
+    assert jobs == [("test", ([a.id, b.id],))]
+    assert eng.test([a.id, c.id]) == 1                 # a is still queued
+
+
+def test_many_configs_skip_the_3_mb_speed_run(eng, monkeypatch):
+    nodes = [proven(eng, i) for i in range(engine.TEST_SPEED_MAX + 1)]
+    kinds = []
+
+    def fake_check(ns, kind, budget):
+        kinds.append(kind)
+        return {n.id: {"ok": True, "ms": 300, "sites": {"yt": True}} for n in ns}
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng._job_test([n.id for n in nodes])
+    assert kinds == ["full"]
+
+
+def test_a_selection_is_removed_at_once(eng):
+    a, b, c = proven(eng, 1), proven(eng, 2), proven(eng, 3)
+    eng.state["pinned"] = b.id
+    assert eng.remove([a.id, b.id, "gone"]) == 2
+    assert set(eng.pool) == {c.id} and eng.state["pinned"] is None
+    assert eng.remove(["gone"]) == 0
