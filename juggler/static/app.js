@@ -155,12 +155,15 @@ function sortedNodes() {
 // A test's row state. Animations restart whenever the table re-renders, so their
 // phase is pinned to the clock: a re-render mid-sweep continues where it was.
 function testView(t) {
-  const idle = { row: "", btn: "", style: "", label: "Test", title: "Test YouTube, Google, Instagram and Telegram now" };
+  const idle = { row: "", btn: "", style: "", label: "Test", title: "Test YouTube, Google, Instagram and Telegram, then measure speed" };
   if (!t) return idle;
   const style = ` style="--phase:-${Date.now() % 1600}ms"`;
   if (t.state === "queued") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Queued', title: "Waiting for the current check to finish" };
   if (t.state === "running") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Testing', title: "Testing now" };
-  if (t.ok) return { row: " tested-ok", btn: " pass", style: "", label: `✓ ${t.ms} ms`, title: "Passed the real-use check" };
+  if (t.state === "speed") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Speed', title: "Measuring speed" };
+  const sp = t.kbps != null ? ` · ${fmtSpeed(t.kbps) || "0 kbps"}` : "";
+  if (t.ok && t.slow) return { row: " tested-ok", btn: " slow", style: "", label: `✓ ${t.ms} ms${sp}`, title: `Works, but below your ${fmtSpeed(S.min_kbps)} minimum speed, so it isn't used` };
+  if (t.ok) return { row: " tested-ok", btn: " pass", style: "", label: `✓ ${t.ms} ms${sp}`, title: "Passed the real-use check" };
   if (t.ok === false) return { row: " tested-bad", btn: " fail", style: "", label: "✗ Failed", title: "Failed the real-use check" };
   return t.offline
     ? { row: "", btn: " unknown", style: "", label: "! Offline", title: "Your own internet looked down, so this test was not counted" }

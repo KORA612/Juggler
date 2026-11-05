@@ -45,6 +45,7 @@ WATCH_EVERY = 20
 WATCH_SPEED_TICKS, WATCH_SPEED_S = 6, 3   # speed of the config in use every 6th watch (~2 min)
 TEST_SHOW_FOR = 12       # seconds a finished dashboard test stays on its row
 SITE_HISTORY = 10        # sites checked from the dashboard, newest first
+TEST_SPEED_MAX = 10      # a manual Test also measures speed (up to 3 MB each) for this many
 POOL_MAX = 150           # scored configs kept
 ACTIVE = 20              # configs loaded into xray
 QUEUE_MAX = 6000
@@ -491,9 +492,10 @@ class Engine:
 
     # dashboard-requested jobs
 
-    def _mark_tests(self, nodes, res=None, counted=True):
+    def _mark_tests(self, nodes, res=None, counted=True, speeds=None):
         """Progress for the dashboard rows. ok=None: unknown (no answer in time, or our
-        own internet was down), which the row must not show as a failed config."""
+        own internet was down), which the row must not show as a failed config. The
+        speed shown is the one measured by this test when there is one."""
         now = time.time()
         with self.lock:
             for n in nodes:
@@ -501,8 +503,13 @@ class Engine:
                     self.tests[n.id] = {"state": "running", "at": now}
                     continue
                 r = res.get(n.id) or {}
+                fresh = (speeds or {}).get(n.id, r.get("kbps"))
+                if fresh is None and n.speed_kbps >= 0:
+                    fresh = n.speed_kbps
                 self.tests[n.id] = {"state": "done", "at": now, "ok": r.get("ok") if counted else None,
-                                    "ms": r.get("ms"), "sites": r.get("sites", {}), "offline": not counted}
+                                    "ms": r.get("ms"), "sites": r.get("sites", {}), "offline": not counted,
+                                    "kbps": fresh if r.get("ok") else None,
+                                    "slow": scoring.too_slow(n)}
 
     def _job_test(self, ids):
         with self.lock:
@@ -512,12 +519,30 @@ class Engine:
         self.phase = "testing"
         self._mark_tests(nodes)
         res = tester.check(nodes, "full", budget=60)
-        self._mark_tests(nodes, res, self._record(nodes, res, "manual test"))
+        counted = self._record(nodes, res, "manual test")
+        passed = [n for n in nodes if res.get(n.id, {}).get("ok")] if counted else []
+        if passed and len(passed) <= TEST_SPEED_MAX:
+            # then a sustained download, so the speed shown is measured now, not guessed
+            now = time.time()
+            with self.lock:
+                self.tests.update({n.id: {"state": "speed", "at": now} for n in passed})
+            self.phase = "speed"
+            sp = tester.check(passed, "speed", budget=40)
+            with self.lock:
+                for n in passed:
+                    if sp.get(n.id):
+                        scoring.record(n, {k: v for k, v in sp[n.id].items() if k != "ok"}, time.time())
+            speeds = {i: r.get("kbps", r.get("kbps_min")) for i, r in sp.items()}
+        else:
+            speeds = {}
+        self._mark_tests(nodes, res, counted, speeds)
         for n in nodes:
             r = res.get(n.id, {})
             s = " ".join(f"{k}{'✓' if v else '✗'}" for k, v in r.get("sites", {}).items())
+            speed = f" · {n.speed_kbps / 1000:.1f} Mbps" if n.speed_kbps >= 0 else ""
             log.info(TAG, f"test {scoring.label(n)} · {'OK' if r.get('ok') else 'FAILED'}"
-                          + (f" · {r.get('ms')} ms · {s}" if r.get("ok") else ""))
+                          + (f" · {r.get('ms')} ms{speed}{' (below the minimum)' if scoring.too_slow(n) else ''} · {s}"
+                             if r.get("ok") else ""))
 
     def _job_site_check(self, host):
         """Can each config reach a site the user named? Informational only: it never

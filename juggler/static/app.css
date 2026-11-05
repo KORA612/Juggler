@@ -475,6 +475,7 @@ tbody tr.failing td { opacity: .5; }
 .mini.testing { border-color: color-mix(in srgb, var(--indigo) 45%, transparent); }
 .mini.pass { color: var(--accent); background: var(--accent-soft); border-color: transparent; font-weight: 600; }
 .mini.fail { color: var(--red); background: var(--red-soft); border-color: transparent; font-weight: 600; }
+.mini.slow { color: var(--amber); background: var(--amber-soft); border-color: transparent; font-weight: 600; }
 .mini.unknown { color: var(--amber); background: var(--amber-soft); border-color: transparent; }
 tbody tr.testing {
   background: linear-gradient(90deg, transparent, var(--indigo-soft), transparent) 0 0 / 50% 100% no-repeat;

@@ -48,6 +48,7 @@ VERIFY_BYTES, SITE_BYTES = 64_000, 16_000
 PAGE_TIMEOUT = 10
 SPEED_SECONDS, SPEED_BYTES = 4, 3_000_000   # cap the cost of a sustained test
 SLOW_BODY_S = 2.0      # a body that takes this long is a real (slow) reading, not slow start
+EXACT_BYTES = 1_000_000   # past this much, slow start no longer dominates: a measurement
 WORKERS = {"quick": 64, "full": 32, "speed": 4, "site": 32}
 PORT_BASES = (TEST_BASE_PORT, 31000, 41000)
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -152,7 +153,7 @@ def _timed(port, url, limit, timeout, body_s, headers=None):
 def reading(got, secs, capped):
     """Bytes over time -> {"kbps": x} (a measurement) or {"kbps_min": x} (a lower bound)."""
     kbps = int(got * 8 / 1000 / max(secs, 0.05))
-    if capped or secs >= SLOW_BODY_S:
+    if capped or secs >= SLOW_BODY_S or got >= EXACT_BYTES:
         return {"kbps": kbps}
     return {"kbps_min": kbps}
 

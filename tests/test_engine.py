@@ -155,13 +155,16 @@ def test_test_progress_is_visible_from_queued_to_result(eng, monkeypatch):
     seen = {}
 
     def fake_check(nodes, kind, budget):
-        seen.update({n.id: eng.snapshot()["tests"][n.id]["state"] for n in nodes})
+        seen[kind] = {n.id: eng.snapshot()["tests"][n.id]["state"] for n in nodes}
+        if kind == "speed":
+            return {a.id: {"ok": True, "kbps": 2400}}
         return {a.id: {"ok": True, "ms": 321, "sites": {"yt": True, "ig": False}}}
     monkeypatch.setattr(engine.tester, "check", fake_check)
     eng._job_test([a.id])
-    assert seen == {a.id: "running"}
+    assert seen == {"full": {a.id: "running"}, "speed": {a.id: "speed"}}
     t = eng.snapshot()["tests"][a.id]
     assert (t["state"], t["ok"], t["ms"], t["sites"]) == ("done", True, 321, {"yt": True, "ig": False})
+    assert t["kbps"] == 2400 and not t["slow"] and a.speed_kbps == 2400
     assert b.id not in eng.snapshot()["tests"]
 
 
@@ -309,3 +312,20 @@ def test_a_pinned_slow_config_stays(eng, monkeypatch):
     eng._watch_speed()
     eng._watch_speed()
     assert eng.primary is cur
+
+
+def test_a_test_that_measures_slow_says_so(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    a = proven(eng, 1)
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget:
+                        {a.id: {"ok": True, "kbps": 90}} if kind == "speed"
+                        else {a.id: {"ok": True, "ms": 300, "sites": {"yt": True}}})
+    eng._job_test([a.id])
+    t = eng.snapshot()["tests"][a.id]
+    assert t["ok"] and t["kbps"] == 90 and t["slow"]
+    assert a.checks == 5                               # the speed run isn't a second check
+
+
+def test_a_big_complete_download_is_a_measurement():
+    from juggler import tester
+    assert tester.reading(3_000_000, 1.5, False) == {"kbps": 16000}
