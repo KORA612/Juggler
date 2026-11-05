@@ -139,3 +139,32 @@ def test_tor_transport_errors_are_summarised_not_printed():
     assert tor._is_transport_noise('Managed proxy "pluggable_transports/lyrebird.exe": Error dialing: x')
     assert tor._is_transport_noise("Proxy Client: unable to connect OR connection")
     assert not tor._is_transport_noise("Could not bind to 127.0.0.1:20850: Address already in use")
+
+
+def test_pac_sends_whitelist_direct_and_falls_back_to_direct():
+    script = sysproxy.pac(20809, sysproxy.bypass_list(WL))
+    assert script.startswith("function FindProxyForURL(url, host)")
+    assert '"*.ir"' in script and '"localhost"' in script and '"127.*"' in script
+    assert 'return "PROXY 127.0.0.1:20809; DIRECT";' in script
+
+
+def test_is_ours_knows_the_script_and_the_old_fixed_proxy():
+    base = {"ProxyEnable": 0, "ProxyServer": None, "AutoConfigURL": None}
+    assert not sysproxy.is_ours(20809, base)
+    assert sysproxy.is_ours(20809, dict(base, AutoConfigURL=sysproxy.PAC_BASE + "?v=123"))
+    assert sysproxy.is_ours(20809, dict(base, ProxyEnable=1, ProxyServer="127.0.0.1:20809"))
+    assert not sysproxy.is_ours(20809, dict(base, AutoConfigURL="http://corp/proxy.pac"))
+    assert not sysproxy.is_ours(20809, dict(base, ProxyEnable=0, ProxyServer="127.0.0.1:20809"))
+
+
+def test_clear_leftover_removes_only_ours(monkeypatch):
+    written = []
+    monkeypatch.setattr(sysproxy, "write", written.append)
+    monkeypatch.setattr(sysproxy, "read", lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:20809",
+                                                   "AutoConfigURL": sysproxy.PAC_BASE + "?v=1"})
+    assert sysproxy.clear_leftover(20809)
+    assert written == [{"AutoConfigURL": None, "ProxyEnable": 0}]
+    written.clear()
+    monkeypatch.setattr(sysproxy, "read", lambda: {"ProxyEnable": 1, "ProxyServer": "10.0.0.1:3128",
+                                                   "AutoConfigURL": None})
+    assert not sysproxy.clear_leftover(20809) and written == []

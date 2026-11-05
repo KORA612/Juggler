@@ -136,10 +136,14 @@ def test_speed_test_with_no_download_is_not_counted_as_a_passed_check(eng, monke
     scoring.record(a, {"ok": False}, time.time())          # one failure: one more triggers failover
     health, fails = a.ok_ewma, a.fails
     monkeypatch.setattr(engine.tester, "_Tester", FakeTesterXray)
-    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 0)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: None)   # no answer
     eng._job_speed()
-    assert (a.ok_ewma, a.fails) == (health, fails)
-    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: 4200)
+    assert (a.ok_ewma, a.fails, a.speed_kbps) == (health, fails, -1)
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: {"kbps": 0})   # headers, no body
+    eng._job_speed()
+    assert (a.ok_ewma, a.fails) == (health, fails) and a.speed_kbps == 0   # slow is evidence, not a pass
+    a.speed_kbps, a.kbps_ewma = -1, 0.0
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda port, url: {"kbps": 4200})
     eng._job_speed()
     assert a.fails == 0 and a.ok_ewma > health and a.speed_kbps == 4200
 
@@ -151,13 +155,16 @@ def test_test_progress_is_visible_from_queued_to_result(eng, monkeypatch):
     seen = {}
 
     def fake_check(nodes, kind, budget):
-        seen.update({n.id: eng.snapshot()["tests"][n.id]["state"] for n in nodes})
+        seen[kind] = {n.id: eng.snapshot()["tests"][n.id]["state"] for n in nodes}
+        if kind == "speed":
+            return {a.id: {"ok": True, "kbps": 2400}}
         return {a.id: {"ok": True, "ms": 321, "sites": {"yt": True, "ig": False}}}
     monkeypatch.setattr(engine.tester, "check", fake_check)
     eng._job_test([a.id])
-    assert seen == {a.id: "running"}
+    assert seen == {"full": {a.id: "running"}, "speed": {a.id: "speed"}}
     t = eng.snapshot()["tests"][a.id]
     assert (t["state"], t["ok"], t["ms"], t["sites"]) == ("done", True, 321, {"yt": True, "ig": False})
+    assert t["kbps"] == 2400 and not t["slow"] and a.speed_kbps == 2400
     assert b.id not in eng.snapshot()["tests"]
 
 
@@ -215,7 +222,7 @@ def test_site_check_reports_reach_per_config_without_touching_health(eng, monkey
     e = eng.snapshot()["sitechecks"][0]
     assert calls == [("site", "https://x.com/home")]
     assert (e["state"], e["reach"], e["total"]) == ("done", 1, 3)
-    assert e["results"] == {a.id: 312, b.id: None, c.id: None}
+    assert e["results"] == {a.id: {"ms": 312, "kbps": None}, b.id: None, c.id: None}
     assert [(n.ok_ewma, n.checks) for n in (a, b, c)] == before
 
 
@@ -239,3 +246,157 @@ def test_site_check_during_an_outage_is_not_blamed_on_the_configs(eng, monkeypat
     eng._job_site_check("x.com")
     e = eng.snapshot()["sitechecks"][0]
     assert e["state"] == "done" and e["offline"] and e["results"] == {}
+
+
+def test_minimum_speed_is_a_saved_setting(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", scoring.min_kbps)
+    assert eng.snapshot()["min_kbps"] == 500
+    assert not eng.set_min_speed(123)                       # only the offered steps
+    assert eng.set_min_speed(1000)
+    assert scoring.min_kbps == 1000
+    again = engine.Engine()
+    assert again.state["min_kbps"] == 1000 and scoring.min_kbps == 1000
+
+
+def test_speed_job_re_measures_slow_configs_too(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    good, slow = proven(eng, 1), proven(eng, 2)
+    scoring.record(slow, {"kbps": 100}, time.time())
+    seen = []
+
+    def fake_check(nodes, kind, budget):
+        seen.extend(n.id for n in nodes)
+        return {slow.id: {"ok": True, "kbps": 3000}}
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng._job_speed()
+    assert set(seen) == {good.id, slow.id}
+    assert slow.speed_kbps > 100
+
+
+def test_the_config_in_use_is_switched_after_two_slow_readings(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    scoring.record(cur, {"kbps": 4000}, time.time())
+    scoring.record(other, {"kbps": 2000}, time.time())
+    eng.primary = cur
+    sizes = []
+
+    def slow(port, url, limit, seconds):
+        sizes.append(limit)
+        return {"kbps": 90}
+    monkeypatch.setattr(engine.tester, "_speed_once", slow)
+    eng._watch_speed()
+    assert eng.primary is cur                        # one slow reading: could be a blip
+    eng._watch_speed()
+    assert eng.primary is other and cur.speed_kbps == 90
+    assert sizes[0] >= 500 * 125 * engine.WATCH_SPEED_S   # can't finish in time below the minimum
+
+
+def test_a_fast_reading_breaks_the_slow_streak(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    scoring.record(cur, {"kbps": 4000}, time.time())
+    eng.primary = cur
+    readings = iter([{"kbps": 90}, {"kbps_min": 3000}, {"kbps": 90}])
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda *a: next(readings))
+    for _ in range(3):
+        eng._watch_speed()
+    assert eng.primary is cur
+
+
+def test_a_pinned_slow_config_stays(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    eng.state["pinned"], eng.primary = cur.id, cur
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda *a: {"kbps": 90})
+    eng._watch_speed()
+    eng._watch_speed()
+    assert eng.primary is cur
+
+
+def test_a_test_that_measures_slow_says_so(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    a = proven(eng, 1)
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget:
+                        {a.id: {"ok": True, "kbps": 90}} if kind == "speed"
+                        else {a.id: {"ok": True, "ms": 300, "sites": {"yt": True}}})
+    eng._job_test([a.id])
+    t = eng.snapshot()["tests"][a.id]
+    assert t["ok"] and t["kbps"] == 90 and t["slow"]
+    assert a.checks == 5                               # the speed run isn't a second check
+
+
+def test_a_big_complete_download_is_a_measurement():
+    from juggler import tester
+    assert tester.reading(3_000_000, 1.5, False) == {"kbps": 16000}
+
+
+def test_site_check_keeps_latency_and_speed_per_config(eng, monkeypatch):
+    a, b = proven(eng, 1), proven(eng, 2)
+    monkeypatch.setattr(engine.tester, "check", lambda nodes, kind, budget, url:
+                        {a.id: {"ok": True, "ms": 420, "kbps": 1800}, b.id: {"ok": False, "ms": None}})
+    ok, host = eng.site_check("chatgpt.com")
+    eng._job_site_check(host)
+    h = eng.snapshot()["sitechecks"][0]
+    assert h["results"] == {a.id: {"ms": 420, "kbps": 1800}, b.id: None} and h["reach"] == 1
+
+
+def test_site_results_saved_by_older_versions_still_load(eng, tmp_path):
+    import json
+    eng.state["sitechecks"] = [{"url": "https://x.com", "host": "x.com", "at": 1, "state": "done",
+                                "results": {"n1": 512, "n2": None}, "total": 2, "reach": 1}]
+    eng.save(force=True)
+    again = engine.Engine()
+    assert again.state["sitechecks"][0]["results"] == {"n1": {"ms": 512, "kbps": None}, "n2": None}
+
+
+def test_a_selection_is_tested_together_and_busy_ones_are_skipped(eng, monkeypatch):
+    a, b, c = proven(eng, 1), proven(eng, 2), proven(eng, 3)
+    jobs = []
+    monkeypatch.setattr(eng, "request", lambda name, *arg: jobs.append((name, arg)))
+    assert eng.test([a.id, b.id, "gone", a.id]) == 2
+    assert jobs == [("test", ([a.id, b.id],))]
+    assert eng.test([a.id, c.id]) == 1                 # a is still queued
+
+
+def test_many_configs_skip_the_3_mb_speed_run(eng, monkeypatch):
+    nodes = [proven(eng, i) for i in range(engine.TEST_SPEED_MAX + 1)]
+    kinds = []
+
+    def fake_check(ns, kind, budget):
+        kinds.append(kind)
+        return {n.id: {"ok": True, "ms": 300, "sites": {"yt": True}} for n in ns}
+    monkeypatch.setattr(engine.tester, "check", fake_check)
+    eng._job_test([n.id for n in nodes])
+    assert kinds == ["full"]
+
+
+def test_a_selection_is_removed_at_once(eng):
+    a, b, c = proven(eng, 1), proven(eng, 2), proven(eng, 3)
+    eng.state["pinned"] = b.id
+    assert eng.remove([a.id, b.id, "gone"]) == 2
+    assert set(eng.pool) == {c.id} and eng.state["pinned"] is None
+    assert eng.remove(["gone"]) == 0
+
+
+def test_start_clears_leftover_proxy_even_when_state_says_off(eng, monkeypatch):
+    from juggler import sysproxy
+    cleared = []
+    monkeypatch.setattr(sysproxy, "SUPPORTED", True)
+    monkeypatch.setattr(sysproxy, "is_ours", lambda port, cur=None: True)
+    monkeypatch.setattr(sysproxy, "clear_leftover", lambda port: cleared.append(port) or True)
+    monkeypatch.setattr(engine.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda s: None})())
+    eng.main.apply = lambda *a, **k: None
+    eng.state["sysproxy"] = {"on": False, "saved": None}
+    eng.start()
+    assert cleared == [engine.HTTP_PORT]
+
+
+def test_disconnect_removes_script_even_with_an_old_snapshot(eng, monkeypatch):
+    from juggler import sysproxy
+    written = []
+    monkeypatch.setattr(sysproxy, "SUPPORTED", True)
+    monkeypatch.setattr(sysproxy, "write", written.append)
+    eng.state["sysproxy"] = {"on": True, "saved": {"ProxyEnable": 0, "ProxyServer": None, "ProxyOverride": None}}
+    assert eng.set_sysproxy(False) == (True, "")
+    assert written[-1]["AutoConfigURL"] is None and written[-1]["ProxyEnable"] == 0

@@ -11,32 +11,46 @@ DEAD_MIN_AGE = 600       # ...and only if it hasn't worked for this long (second
 BACKOFF = (1800, 7200, 21600, 86400)   # retry a retired config after 30 m, 2 h, 6 h, 24 h
 SITE_WEIGHT = {"yt": 2.0, "google": 1.0, "ig": 1.0, "tg": 1.0}
 SITE_NAMES = {"yt": "YouTube", "google": "Google", "ig": "Instagram", "tg": "Telegram"}
+DEFAULT_MIN_KBPS = 500   # below this a config answers but can't load real pages
+min_kbps = DEFAULT_MIN_KBPS   # set from the dashboard (engine.set_min_speed); 0 = off
 
 
 def _ewma(old, new, first):
     return new if first else old + ALPHA * (new - old)
 
 
+def speed_known(node):
+    return node.speed_kbps >= 0
+
+
 def record(node, result, now):
-    """Fold one check into the node. result = {"ok", "ms"?, "sites"?: {site: bool}, "kbps"?}"""
-    ok = bool(result.get("ok"))
-    node.ok_ewma = _ewma(node.ok_ewma, 1.0 if ok else 0.0, node.checks == 0)
-    node.checks += 1
-    node.last_check = node.tested_at = now
-    if ok:
-        node.fails = 0
-        node.last_ok = now
-        ms = result.get("ms")
-        if ms:
-            node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
-            node.ping_ms = int(ms)                  # shown: the latest; ranking uses lat_ewma
-    else:
-        node.fails += 1
+    """Fold one check into the node. result = {"ok"?, "ms"?, "sites"?: {site: bool},
+    "kbps"? (a measurement), "kbps_min"? (a lower bound)}. Without "ok" it's speed
+    evidence only and doesn't count as a check."""
+    if "ok" in result:
+        ok = bool(result.get("ok"))
+        node.ok_ewma = _ewma(node.ok_ewma, 1.0 if ok else 0.0, node.checks == 0)
+        node.checks += 1
+        node.last_check = node.tested_at = now
+        if ok:
+            node.fails = 0
+            node.last_ok = now
+            ms = result.get("ms")
+            if ms:
+                node.lat_ewma = _ewma(node.lat_ewma, float(ms), not node.lat_ewma)
+                node.ping_ms = int(ms)              # shown: the latest; ranking uses lat_ewma
+        else:
+            node.fails += 1
     for site, passed in (result.get("sites") or {}).items():
         node.sites[site] = _ewma(node.sites.get(site, 0.0), 1.0 if passed else 0.0, site not in node.sites)
-    kbps = result.get("kbps")
+    kbps, floor = result.get("kbps"), result.get("kbps_min")
     if kbps is not None:
-        node.kbps_ewma = _ewma(node.kbps_ewma, float(kbps), not node.kbps_ewma)
+        node.kbps_ewma = _ewma(node.kbps_ewma, float(kbps), not speed_known(node))
+    elif floor is not None and speed_known(node) and node.kbps_ewma < floor:
+        # A quick small download proves "at least this fast": it can lift a low average
+        # (a throttled config that recovered) but never sets or lowers one.
+        node.kbps_ewma = _ewma(node.kbps_ewma, float(floor), False)
+    if speed_known(node) or kbps is not None:
         node.speed_kbps = int(node.kbps_ewma)
 
 
@@ -70,7 +84,7 @@ def score(node):
     if node.checks == 0:
         return 0.0
     lat = 1.0 / (1.0 + node.lat_ewma / 800.0) if node.lat_ewma else 0.5
-    spd = min(node.kbps_ewma / 4000.0, 1.0) if node.kbps_ewma else 0.3
+    spd = min(node.kbps_ewma / 4000.0, 1.0) if speed_known(node) else 0.15   # unmeasured < measured fast
     s = 0.5 * node.ok_ewma + 0.3 * _site_score(node) + 0.15 * lat + 0.05 * spd
     s *= 0.6 + 0.4 * min(node.checks / 4.0, 1.0)  # little history = less trust
     if youtube_broken(node):
@@ -78,8 +92,18 @@ def score(node):
     return s
 
 
+def too_slow(node):
+    """Measured below the minimum speed. Kept in the pool and re-measured, just not used."""
+    return min_kbps > 0 and speed_known(node) and node.kbps_ewma < min_kbps
+
+
 def eligible(node):
-    """May carry traffic: has worked, isn't on a failure streak, loads YouTube."""
+    """May carry traffic: has worked, isn't on a failure streak, loads YouTube, and
+    isn't measured below the minimum speed."""
+    return usable(node) and not too_slow(node)
+
+
+def usable(node):
     return node.last_ok > 0 and node.fails < 2 and not youtube_broken(node)
 
 
@@ -96,7 +120,11 @@ def backoff(strikes):
 
 
 def rank(nodes):
-    return sorted((n for n in nodes if eligible(n)), key=score, reverse=True)
+    """Configs that may carry traffic, best first. When *every* working config is below
+    the minimum speed, slow beats nothing: they're ranked instead of falling to Tor."""
+    nodes = [n for n in nodes if usable(n)]
+    fast = [n for n in nodes if not too_slow(n)]
+    return sorted(fast or nodes, key=score, reverse=True)
 
 
 def label(node):
@@ -113,6 +141,13 @@ def choose_primary(current, ranked, manual):
         best = next((n for n in ranked if n is not manual and n.fails == 0), None)
         if best is not None:
             return best, f"pinned config {label(manual)} failed {manual.fails} checks"
+    if current is not None and current.last_ok and current.fails < 2 and current in ranked:
+        return current, ""
+    if current is not None and current.last_ok and current.fails < 2 and too_slow(current):
+        best = next((n for n in ranked if n is not current and n.fails == 0), None)
+        if best is None:
+            return current, ""
+        return best, f"{label(current)} is below {min_kbps} kbps ({current.speed_kbps} kbps)"
     if current is not None and current.last_ok and current.fails < 2:
         return current, ""
     best = next((n for n in ranked if n is not current and n.fails == 0), None)

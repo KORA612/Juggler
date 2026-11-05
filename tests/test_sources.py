@@ -42,7 +42,24 @@ def test_tg_html_escaped_links():
 def test_defaults_are_telegram_heavy_and_legacy_is_upgradeable():
     tg = [u for u in sources.DEFAULT_SOURCES if sources.is_telegram(u)]
     assert len(tg) >= 20 and "https://t.me/s/ConfigsHUB" in tg
-    assert sources.LEGACY_DEFAULT != sources.DEFAULT_SOURCES
+    assert all(old != sources.DEFAULT_SOURCES for old in sources.LEGACY_DEFAULTS)
+    assert len(set(sources.TELEGRAM_CHANNELS)) == len(sources.TELEGRAM_CHANNELS)
+
+
+def test_unedited_old_default_is_upgraded_edited_list_is_kept(tmp_path, monkeypatch):
+    from juggler import engine
+    from juggler.paths import read_lines, write_lines
+    path = str(tmp_path / "sources.txt")
+    for name, f in (("SOURCES_TXT", path), ("WHITELIST_TXT", str(tmp_path / "wl")),
+                    ("BRIDGES_TXT", str(tmp_path / "br")), ("STATE_JSON", str(tmp_path / "st"))):
+        monkeypatch.setattr(engine, name, f)
+    write_lines(path, sources.LEGACY_DEFAULTS[-1], "# old default")
+    engine.Engine._ensure_files(None)
+    assert read_lines(path) == sources.DEFAULT_SOURCES
+    edited = sources.LEGACY_DEFAULTS[-1][:5]
+    write_lines(path, edited, "# mine")
+    engine.Engine._ensure_files(None)
+    assert read_lines(path) == edited
 
 
 def test_short_name():

@@ -22,26 +22,71 @@ $("#theme").onclick = () => {
 
 // ---------- helpers ----------
 async function api(path, method = "GET", body) {
-  const r = await fetch(path, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  // X-Juggler: other websites can't add this header, so they can't drive Juggler (see app.py)
+  const headers = method === "GET" ? {} : { "X-Juggler": "1", ...(body ? { "Content-Type": "application/json" } : {}) };
+  const r = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let data = {};
   try { data = await r.json(); } catch {}
   if (!r.ok) throw new Error(data.msg || `HTTP ${r.status}`);
   return data;
 }
-function toast(msg, err = false) {
-  const t = document.createElement("div");
-  t.className = "toast" + (err ? " err" : "");
-  t.textContent = msg;
-  $("#toasts").appendChild(t);
-  setTimeout(() => t.remove(), 3200);
+
+// Motion: transform/opacity only, short, ease-out. Reduced motion keeps fades, drops movement.
+const EASE = "cubic-bezier(.23, 1, .32, 1)";
+const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const anim = (el, frames, ms, extra = {}) => (el.animate ? el.animate(frames, { duration: ms, easing: EASE, ...extra }) : null);
+
+// Only touch the DOM when the markup really changed: hover, focus and running animations survive.
+function setHTML(el, html) {
+  if (el._html === html) return false;
+  el.innerHTML = html; el._html = html;
+  return true;
 }
-async function copy(text, what = "Copied") {
+
+// Toasts confirm what the page already shows, so they're short; errors stay longer.
+// At most 3 on screen, newest at the bottom, hover pauses them.
+const TOAST_ICON = { ok: "✓", err: "✕", info: "•" };
+function toast(msg, kind = "ok") {
+  if (kind === true) kind = "err";
+  const box = $("#toasts");
+  while (box.childElementCount >= 3) dismiss(box.firstElementChild, true);
+  const t = document.createElement("div");
+  t.className = `toast ${kind}`;
+  t.setAttribute("role", kind === "err" ? "alert" : "status");
+  t.innerHTML = `<span class="toast-i">${TOAST_ICON[kind] || "•"}</span><span></span>`;
+  t.lastChild.textContent = msg;
+  box.appendChild(t);
+  anim(t, [{ opacity: 0, transform: reduced.matches ? "none" : "translateY(10px) scale(.98)" }, { opacity: 1, transform: "none" }], 220);
+  let left = kind === "err" ? 5000 : 2600, since = Date.now(), timer;
+  const arm = () => { since = Date.now(); timer = setTimeout(() => dismiss(t), left); };
+  t.onmouseenter = () => { clearTimeout(timer); left -= Date.now() - since; };
+  t.onmouseleave = arm;
+  arm();
+}
+function dismiss(t, now = false) {
+  if (!t || t._gone) return;
+  t._gone = true;
+  if (now) { t.remove(); return; }
+  const a = anim(t, [{ opacity: 1 }, { opacity: 0, transform: reduced.matches ? "none" : "translateX(12px)" }], 160, { fill: "forwards" });
+  a ? a.finished.then(() => t.remove(), () => t.remove()) : t.remove();
+}
+
+// A button that confirms in place ("✓ Copied") instead of only in a toast.
+function flashLabel(btn, label, ms = 1200) {
+  if (!btn) return;
+  if (btn._label == null) btn._label = btn.innerHTML;
+  clearTimeout(btn._labelT);
+  btn.innerHTML = label; btn.classList.add("done");
+  btn._labelT = setTimeout(() => { btn.innerHTML = btn._label; btn._label = null; btn.classList.remove("done"); }, ms);
+}
+async function copy(text, what = "Copied", btn = null) {
   try { await navigator.clipboard.writeText(text); }
   catch {
     const ta = Object.assign(document.createElement("textarea"), { value: text });
     document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
   }
-  toast(`✓ ${what}`);
+  if (btn) flashLabel(btn, "✓ Copied"); else toast(what);
 }
 const qrSrc = (d) => "/api/qr?d=" + encodeURIComponent(d);
 const fmtSpeed = (k) => (k > 0 ? (k >= 1000 ? (k / 1000).toFixed(1) + " Mbps" : k + " kbps") : null);
@@ -55,6 +100,7 @@ function ago(ts) {
 }
 
 // ---------- render ----------
+let heroKey = null;
 function renderHero() {
   $(".hero").classList.toggle("on", !!S.sysproxy.on);
   const n = S.nodes.find((x) => x.id === S.active) || (S.mode === "nodes" ? S.nodes.find((x) => x.in_balancer) : null);
@@ -86,7 +132,12 @@ function renderHero() {
   if (sw && sw.reason && Date.now() / 1000 - sw.at < 3600)
     chips.push(`<span class="chip warn" title="${esc(sw.reason)}">switched ${ago(sw.at)}: ${esc(sw.reason.slice(0, 48))}</span>`);
   chips.push(`<span class="chip">sources <b>${ago(S.last_refresh)}</b></span>`);
-  $("#hero-chips").innerHTML = chips.join("");
+  setHTML($("#hero-chips"), chips.join(""));
+  // The config in use changed: the hero slides it in, so a switch is noticed.
+  const key = n ? n.id : S.mode;
+  if (heroKey !== null && heroKey !== key)
+    anim($(".hero-main"), [{ opacity: 0, transform: reduced.matches ? "none" : "translateY(8px)" }, { opacity: 1, transform: "none" }], 320);
+  heroKey = key;
   $("#subtitle").textContent = S.xray ? `socks :20808 · http :20809 · ${S.mode === "nodes" ? "online" : S.mode}` : "xray is not running";
 
   const phases = { fetching: "Fetching sources", exploring: "Exploring new configs", checking: "Checking configs",
@@ -124,43 +175,67 @@ function renderControls() {
   sm.title = S.safe_mode ? "Safe mode on: configs that send traffic unencrypted are dropped. Click to turn off"
     : "Safe mode off: unencrypted configs are allowed. Click to turn on";
   $("#safemode-state").textContent = S.safe_mode ? "On" : "Off";
+  const ms = $("#minspeed");
+  const opts = (S.speed_floors || []).map((k) => `<option value="${k}">${k ? fmtSpeed(k) : "Off"}</option>`).join("");
+  setHTML(ms, opts);
+  if (document.activeElement !== ms) ms.value = String(S.min_kbps);
   const st = S.stats || {};
   const steps = [["links", "links found"], ["queued", "queued"], ["pool", "in pool"], ["eligible", "working"], ["active", "loaded"]];
-  $("#funnel").innerHTML = steps.map(([k, label], i) => {
-    const v = st[k] ?? "–";
-    return `<div class="step${i >= 3 ? " final" : ""}"><b>${typeof v === "number" ? v.toLocaleString() : v}</b><span>${label}</span></div>`;
-  }).join("");
+  const fun = $("#funnel");
+  setHTML(fun, steps.map(([k, label], i) => `<div class="step${i >= 3 ? " final" : ""}"><b data-k="${k}">–</b><span>${label}</span></div>`).join(""));
+  fun.querySelectorAll("b[data-k]").forEach((b) => countTo(b, st[b.dataset.k]));
+}
+
+// Numbers roll to their new value instead of jumping (5 numbers, ~0.4 s, rAF only while moving).
+function countTo(el, v) {
+  if (typeof v !== "number") { el.textContent = v ?? "–"; el._v = null; return; }
+  const from = el._v;
+  el._v = v;
+  if (from == null || from === v || reduced.matches || document.hidden) { el.textContent = v.toLocaleString(); return; }
+  const t0 = performance.now(), id = (el._anim = (el._anim || 0) + 1);
+  const step = (t) => {
+    if (el._anim !== id) return;
+    const k = Math.min(1, (t - t0) / 450), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = Math.round(from + (v - from) * e).toLocaleString();
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  anim(el, [{ color: cssVar(v > from ? "--accent" : "--amber") }], 900);   // fades back to its own colour
 }
 
 const speedColor = (k) => (k >= 3000 ? "var(--accent)" : k >= 1000 ? "var(--amber)" : "var(--red)");
 
 function sortedNodes() {
   const site = selectedSite();
-  const arr = S.nodes.map((n, i) => ({ ...n, rank: i + 1, _health: -n.health,
-    _site: site && typeof site.results[n.id] === "number" ? site.results[n.id] : Infinity }));
-  const k = { health: "_health", site: "_site" }[sort.key] || sort.key;
+  const arr = S.nodes.map((n, i) => {
+    const r = site && site.results[n.id];
+    return { ...n, rank: i + 1, _health: -n.health, _site: r ? r.ms : Infinity,
+             _sspeed: r && r.kbps != null ? r.kbps : 0 };
+  });
+  const k = { health: "_health", site: "_site", ...(site ? { speed_kbps: "_sspeed" } : {}) }[sort.key] || sort.key;
   arr.sort((a, b) => {
     let x = a[k], y = b[k];
-    if (k === "speed_kbps") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
+    if (k === "speed_kbps" || k === "_sspeed") { x = x > 0 ? -x : 0; y = y > 0 ? -y : 0; }   // fastest first
     if (k === "country") { x = regionName(x); y = regionName(y); }
     return (x > y ? 1 : x < y ? -1 : 0) * sort.dir;
   });
   return arr;
 }
 
-// A test's row state. Animations restart whenever the table re-renders, so their
-// phase is pinned to the clock: a re-render mid-sweep continues where it was.
+// A test's row state. Rows are patched in place, so spinners keep turning across polls.
 function testView(t) {
-  const idle = { row: "", btn: "", style: "", label: "Test", title: "Test YouTube, Google, Instagram and Telegram now" };
+  const idle = { row: "", btn: "", label: "Test", title: "Test YouTube, Google, Instagram and Telegram, then measure speed" };
   if (!t) return idle;
-  const style = ` style="--phase:-${Date.now() % 1600}ms"`;
-  if (t.state === "queued") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Queued', title: "Waiting for the current check to finish" };
-  if (t.state === "running") return { row: " testing", btn: " testing", style, label: '<span class="spin"></span>Testing', title: "Testing now" };
-  if (t.ok) return { row: " tested-ok", btn: " pass", style: "", label: `✓ ${t.ms} ms`, title: "Passed the real-use check" };
-  if (t.ok === false) return { row: " tested-bad", btn: " fail", style: "", label: "✗ Failed", title: "Failed the real-use check" };
+  if (t.state === "queued") return { row: " testing", btn: " testing", label: '<span class="spin"></span>Queued', title: "Waiting for the current check to finish" };
+  if (t.state === "running") return { row: " testing", btn: " testing", label: '<span class="spin"></span>Testing', title: "Testing now" };
+  if (t.state === "speed") return { row: " testing", btn: " testing", label: '<span class="spin"></span>Speed', title: "Measuring speed" };
+  const sp = t.kbps != null ? ` · ${fmtSpeed(t.kbps) || "0 kbps"}` : "";
+  if (t.ok && t.slow) return { row: " tested-ok", btn: " slow", label: `✓ ${t.ms} ms${sp}`, title: `Works, but below your ${fmtSpeed(S.min_kbps)} minimum speed, so it isn't used` };
+  if (t.ok) return { row: " tested-ok", btn: " pass", label: `✓ ${t.ms} ms${sp}`, title: "Passed the real-use check" };
+  if (t.ok === false) return { row: " tested-bad", btn: " fail", label: "✗ Failed", title: "Failed the real-use check" };
   return t.offline
-    ? { row: "", btn: " unknown", style: "", label: "! Offline", title: "Your own internet looked down, so this test was not counted" }
-    : { row: "", btn: " unknown", style: "", label: "? No answer", title: "No answer in time; not counted as a failure" };
+    ? { row: "", btn: " unknown", label: "! Offline", title: "Your own internet looked down, so this test was not counted" }
+    : { row: "", btn: " unknown", label: "? No answer", title: "No answer in time; not counted as a failure" };
 }
 // ---------- site check ----------
 let siteSel = null;   // host whose results are shown as a table column
@@ -168,11 +243,18 @@ const selectedSite = () => (S?.sitechecks || []).find((h) => h.host === siteSel)
 const sitesActive = () => (S?.sitechecks || []).some((h) => h.state !== "done");
 
 function siteCell(n, site) {
-  const ms = site.results[n.id];
-  if (typeof ms === "number") return `<span class="reach ok">✓ ${ms} ms</span>`;
-  if (ms === null) return `<span class="reach bad" title="Didn't answer through this config">✗</span>`;
+  const r = site.results[n.id];
+  if (r) return `<span class="reach ok" title="Time to ${esc(site.host)}'s answer">✓ ${r.ms} ms</span>`;
+  if (r === null) return `<span class="reach bad" title="Didn't answer through this config">✗</span>`;
   return site.state === "done" ? `<span class="reach na" title="Added after this check">–</span>`
-    : `<span class="spin reach na" style="--phase:-${Date.now() % 1600}ms"></span>`;
+    : '<span class="spin reach na"></span>';
+}
+
+function siteSpeed(n, site) {
+  const r = site.results[n.id];
+  if (!r) return '<span class="metric na">–</span>';
+  if (r.kbps == null) return `<span class="metric na" title="${esc(site.host)}'s page is too small to time">–</span>`;
+  return `<span class="metric" style="color:${speedColor(r.kbps)}">${fmtSpeed(r.kbps) || "0 kbps"}</span>`;
 }
 
 // One tab per checked site (newest first). Only re-rendered when it changes, so hover
@@ -190,12 +272,14 @@ function renderTabs() {
       : `<span class="tab-n" title="${h.reach} of ${h.total} configs reached it">${h.reach}/${h.total}</span>`;
     return tab(h.host, esc(h.host), meta, `<button class="tab-x" data-sact="forget" title="Forget this site" aria-label="Forget ${esc(h.host)}">×</button>`);
   })).join("");
-  const el = $("#tabs");
-  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+  setHTML($("#tabs"), html);
 
   const site = selectedSite();
   $("#node-table").classList.toggle("site-mode", !!site);
   if (site) { $("#site-col").textContent = site.host; $("#site-col").title = site.url; }
+  const spCol = $("th[data-sort=speed_kbps]");
+  spCol.textContent = site ? "Site speed" : "Speed";
+  spCol.title = site ? `Download speed from ${site.host} through each config` : "";
   const rerun = $("#site-rerun");
   rerun.hidden = !site;
   rerun.disabled = !!site && site.state !== "done";
@@ -208,7 +292,41 @@ function renderTestAll() {
   const all = Object.values(S.tests || {}), left = testsActive();
   const b = $("#test-all");
   b.classList.toggle("testing", left > 0);
-  b.innerHTML = left > 0 && all.length > 1 ? `<span class="spin"></span>Testing ${all.length - left}/${all.length}` : "Test all";
+  setHTML(b, left > 0 && all.length > 1 ? `<span class="spin"></span>Testing ${all.length - left}/${all.length}` : "Test all");
+}
+
+// ---------- selection: checkboxes, shift+click for a range ----------
+const selected = new Set();
+let selAnchor = null;      // the last row clicked, the start of a shift+click range
+let bulkArm = 0;           // Remove takes a second click, like the row ×
+
+function selectRange(id, on) {
+  const ids = sortedNodes().map((n) => n.id);
+  const a = ids.indexOf(selAnchor), b = ids.indexOf(id);
+  const range = a < 0 || b < 0 ? [id] : ids.slice(Math.min(a, b), Math.max(a, b) + 1);
+  range.forEach((x) => (on ? selected.add(x) : selected.delete(x)));
+}
+function toggleSel(id, shift) {
+  const on = !selected.has(id);
+  if (shift && selAnchor) selectRange(id, on);
+  else on ? selected.add(id) : selected.delete(id);
+  selAnchor = id;
+  renderNodes();
+}
+function clearSel() { selected.clear(); selAnchor = null; bulkArm = 0; renderNodes(); }
+
+function renderBulk() {
+  const ids = new Set(S.nodes.map((n) => n.id));
+  [...selected].forEach((x) => { if (!ids.has(x)) selected.delete(x); });
+  const n = selected.size;
+  $("#bulk").hidden = n === 0;
+  $("#bulk-n").textContent = `${n} selected`;
+  const rm = $("#bulk-remove"), armed = Date.now() < bulkArm;
+  rm.classList.toggle("armed", armed);
+  rm.textContent = armed ? `Click again to remove ${n}` : "Remove";
+  const all = $("#sel-all");
+  all.checked = n > 0 && n === S.nodes.length;
+  all.indeterminate = n > 0 && n < S.nodes.length;
 }
 
 // Removing takes a second click, so a stray click next to Share does nothing.
@@ -220,8 +338,81 @@ function removeBtn(n) {
     : `<button class="mini danger" data-act="remove" title="Remove this config">×</button>`;
 }
 
+// ---------- the table: one <tr> per config, kept across polls ----------
+// Rows are patched cell by cell and moved, never rebuilt, so nothing flashes, hover and
+// focus survive, and the page keeps its scroll position.
+const rows = new Map();          // id -> <tr>
+let rowsShown = false;           // first render: no enter/flash animations
+const CELL_CLASS = ["sel", "rank", "", "", "num c-site", "num", "num c-ping", "num", ""];
+const SHARE_SVG = '<svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>';
+
+function rowView(n, site) {
+  const pclass = ["vless", "vmess", "trojan", "ss", "hysteria2"].includes(n.proto) ? `p-${n.proto}` : "p-other";
+  const sp = fmtSpeed(n.speed_kbps);
+  const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
+  const rel = n.health ?? 0;
+  const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
+  const t = testView(S.tests?.[n.id]);
+  const sel = selected.has(n.id);
+  const cls = `${sel ? "selected " : ""}${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}${n._pending ? " pending" : ""}`;
+  const speedCell = site ? siteSpeed(n, site)
+    : sp || n.speed_kbps === 0 ? `<span class="metric${n.slow ? " slow" : ""}" style="color:${speedColor(n.speed_kbps)}"${n.slow ? ` title="Below your ${fmtSpeed(S.min_kbps)} minimum: kept and re-measured, not used"` : ""}>${sp || "0 kbps"}</span>`
+    : '<span class="metric na">–</span>';
+  return {
+    cls,
+    title: n.eligible && !n.active ? "Double-click to use this config" : "",
+    cells: [
+      `<input type="checkbox" data-sel${sel ? " checked" : ""} aria-label="Select">`,
+      String(n.rank),
+      `<div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div>`,
+      `<span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span>`,
+      site ? siteCell(n, site) : "",
+      `<span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="transform:scaleX(${Math.max(4, rel) / 100});background:${relColor}"></i></span></span>`,
+      n.ping_ms > 0 ? `<span class="metric" style="color:${pingColor(n.ping_ms)}">${n.ping_ms} ms</span>` : '<span class="metric na">–</span>',
+      speedCell,
+      `<div class="acts">${n.eligible && !n.active ? '<button class="mini use" data-act="use">Use</button>' : ""}<button class="mini${t.btn}" data-act="test" title="${t.title}">${t.label}</button><button class="mini icon" data-act="qr" title="Share: QR code and link" aria-label="Share">${SHARE_SVG}</button>${removeBtn(n)}</div>`,
+    ],
+    // compared between polls: a changed value flashes, green when better, red when worse
+    vals: [null, null, null, null, null, rel, n.ping_ms > 0 ? -n.ping_ms : null, n.speed_kbps > 0 ? n.speed_kbps : null, null],
+  };
+}
+
+function newRow(id) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = id;
+  tr._cells = []; tr._vals = [];
+  CELL_CLASS.forEach((c) => { const td = document.createElement("td"); if (c) td.className = c; tr.appendChild(td); });
+  return tr;
+}
+
+function patchRow(tr, n, site, animate) {
+  const v = rowView(n, site);
+  if (tr.className !== v.cls) tr.className = v.cls;
+  if (tr.title !== v.title) tr.title = v.title;
+  v.cells.forEach((html, i) => {
+    const td = tr.children[i];
+    if (tr._cells[i] !== html) { td.innerHTML = html; tr._cells[i] = html; }
+    const was = tr._vals[i], now = v.vals[i];
+    if (animate && was != null && now != null && was !== now) flashCell(td, now > was);
+    tr._vals[i] = now;
+  });
+}
+
+function flashCell(td, better) {
+  anim(td, [{ backgroundColor: cssVar(better ? "--accent-soft" : "--red-soft") }], 900);   // to its own background
+}
+
+function removeRow(tr) {
+  rows.delete(tr.dataset.id);
+  delete tr.dataset.id;                      // clicks on a leaving row do nothing
+  tr.classList.add("leaving");
+  const a = rowsShown && anim(tr, [{ opacity: 1 }, { opacity: 0, transform: reduced.matches ? "none" : "translateX(-8px)" }], 180, { fill: "forwards" });
+  a ? a.finished.then(() => tr.remove(), () => tr.remove()) : tr.remove();
+}
+
 function renderNodes() {
   renderTestAll();
+  renderBulk();
   const site = selectedSite();
   $("#node-count").textContent = S.nodes.length;
   $("#nodes-empty").hidden = S.nodes.length > 0;
@@ -229,29 +420,31 @@ function renderNodes() {
   $("#balancer-hint").textContent = S.pinned ? "Pinned by you" : "Auto · best score, sticky";
   renderTabs();
   document.querySelectorAll("th[data-sort]").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === sort.key));
-  $("#nodes").innerHTML = sortedNodes().map((n) => {
-    const pclass = ["vless", "vmess", "trojan", "ss", "hysteria2"].includes(n.proto) ? `p-${n.proto}` : "p-other";
-    const sp = fmtSpeed(n.speed_kbps);
-    const name = n.name ? esc(n.name.slice(0, 60)) : esc(n.host);
-    const rel = n.health ?? 0;
-    const relColor = rel >= 80 ? "var(--accent)" : rel >= 50 ? "var(--amber)" : "var(--red)";
-    const t = testView(S.tests?.[n.id]);
-    return `<tr class="${n.active ? "active" : ""}${n.in_balancer ? "" : " out"}${n.eligible ? "" : " failing"}${site && site.results[n.id] === null ? " noreach" : ""}${t.row}" data-id="${n.id}"${t.style}${n.eligible && !n.active ? ' title="Double-click to use this config"' : ""}>
-      <td class="rank">${n.rank}</td>
-      <td><div class="loc"><span class="f">${n.flag}</span><div>${esc(regionName(n.country))}${n.active ? '<span class="live-dot" title="in use"></span>' : ""}${n.manual ? '<span class="tag-manual">manual</span>' : ""}<small title="${esc(n.name)}">${name}</small></div></div></td>
-      <td><span class="badge ${pclass}">${esc(n.proto)}</span><span class="tsec" title="${esc(n.net)} · ${esc(n.sec)}">${esc(n.net)} · ${esc(n.sec)}</span></td>
-      <td class="num c-site">${site ? siteCell(n, site) : ""}</td>
-      <td class="num"><span class="health" title="${n.checks} checks · ${n.fails} failed in a row">${rel}%<span class="bar"><i style="width:${Math.max(4, rel)}%;background:${relColor}"></i></span></span></td>
-      <td class="num c-ping">${n.ping_ms > 0 ? `<span class="metric" style="color:${pingColor(n.ping_ms)}">${n.ping_ms} ms</span>` : '<span class="metric na">–</span>'}</td>
-      <td class="num">${sp ? `<span class="metric" style="color:${speedColor(n.speed_kbps)}">${sp}</span>` : '<span class="metric na">–</span>'}</td>
-      <td><div class="acts">
-        ${n.eligible && !n.active ? `<button class="mini use" data-act="use">Use</button>` : ""}
-        <button class="mini${t.btn}" data-act="test" title="${t.title}"${t.style}>${t.label}</button>
-        <button class="mini icon" data-act="qr" title="Share: QR code and link" aria-label="Share">
-          <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>
-        ${removeBtn(n)}
-      </div></td></tr>`;
-  }).join("");
+
+  const body = $("#nodes"), list = sortedNodes(), keep = new Set(list.map((n) => n.id));
+  for (const tr of [...rows.values()]) if (!keep.has(tr.dataset.id)) removeRow(tr);
+
+  // FLIP: remember where rows were, reorder, then slide the ones that moved from there.
+  const animate = rowsShown && !document.hidden;
+  const before = animate ? new Map([...rows].map(([id, tr]) => [id, tr.offsetTop])) : null;
+  let prev = null;
+  for (const n of list) {
+    let tr = rows.get(n.id);
+    const fresh = !tr;
+    if (fresh) rows.set(n.id, (tr = newRow(n.id)));
+    patchRow(tr, n, site, animate && !fresh);
+    const want = prev ? prev.nextSibling : body.firstChild;
+    if (want !== tr) body.insertBefore(tr, want);
+    prev = tr;
+    if (fresh && animate) anim(tr, [{ opacity: 0, transform: reduced.matches ? "none" : "translateY(6px)" }, { opacity: 1, transform: "none" }], 240);
+  }
+  if (before && !reduced.matches) {
+    const moved = [];
+    for (const [id, top] of before) { const tr = rows.get(id); if (tr) { const d = top - tr.offsetTop; if (d) moved.push([tr, d]); } }
+    // a big reshuffle (a new sort) just snaps: animating 150 rows costs more than it shows
+    if (moved.length <= 30) moved.forEach(([tr, d]) => anim(tr, [{ transform: `translateY(${d}px)` }, { transform: "none" }], 260));
+  }
+  rowsShown = true;
 }
 
 function renderSide() {
@@ -272,11 +465,11 @@ function renderSide() {
   }[t.status] || "";
   const st = S.stats || {};
   const fn = st.fn ? `false negatives ~${Math.round((100 * st.fn.revived) / Math.max(st.fn.sampled, 1))}% (${st.fn.revived}/${st.fn.sampled} retired configs worked)` : "false-negative check runs hourly";
-  $("#foot-stats").innerHTML = `<span>test traffic ~${st.bandwidth_mb_h ?? 0} MB/h</span><span>${fn}</span>`;
+  setHTML($("#foot-stats"), `<span>test traffic ~${st.bandwidth_mb_h ?? 0} MB/h</span><span>${fn}</span>`);
   const rep = Object.entries(S.report || {});
-  $("#sources").innerHTML = rep.length
+  setHTML($("#sources"), rep.length
     ? rep.map(([u, r]) => `<li><span title="${esc(u)}">${esc(u.replace(/^https?:\/\//, ""))}</span><span><span class="hint">${r.count.toLocaleString()}</span> <span class="path ${r.path}">${r.path}</span></span></li>`).join("")
-    : '<li><span>Waiting for the first fetch…</span></li>';
+    : '<li><span>Waiting for the first fetch…</span></li>');
 }
 
 function renderPhone() {
@@ -307,9 +500,7 @@ function renderPhone() {
       out.push(`<button class="btn small" id="fw-allow">Allow phone access</button>`);
     }
   }
-  const html = out.join("");
-  const el = $("#phone-status");
-  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+  setHTML($("#phone-status"), out.join(""));
 }
 
 function render() {
@@ -334,10 +525,15 @@ function tick() {
 setInterval(tick, 1000);
 
 // ---------- polling ----------
-let fastPoll = null;
+// Every action changes the page first (optimistic) and then tells Juggler. A poll that
+// was already on its way back would briefly undo that change, so while an action is in
+// flight, or if one started after the poll was sent, the poll's answer is dropped.
+let fastPoll = null, inflight = 0, epoch = 0;
 async function poll() {
+  const sent = epoch;
   try {
     const s = await api("/api/state");
+    if (inflight || sent !== epoch) return;
     s._skew = Date.now() / 1000 - s.now;
     S = s;
     render(); tick();
@@ -346,38 +542,97 @@ async function poll() {
   } catch { $("#subtitle").textContent = "dashboard lost connection to Juggler"; $("#orb").className = "orb off"; }
 }
 poll();
-setInterval(poll, 4000);
+setInterval(() => { if (!document.hidden) poll(); }, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+
+// apply(): change S and re-render right now. If Juggler refuses, S goes back as it was.
+async function act(apply, request, { btn } = {}) {
+  epoch++; inflight++;
+  const before = S && structuredClone(S);
+  if (apply && S) { apply(S); render(); }
+  // a request slower than 150 ms gets a spinner on its button (faster ones never flicker one)
+  const slow = btn && setTimeout(() => btn.classList.add("busy"), 150);
+  try { return await request(); }
+  catch (e) {
+    if (before) { S = before; render(); }
+    toast(e.message, "err");
+    if (btn) shake(btn);
+    return null;
+  } finally {
+    clearTimeout(slow);
+    if (btn) btn.classList.remove("busy");
+    inflight--; epoch++;
+    if (!inflight) poll();
+  }
+}
+const shake = (el) => !reduced.matches && anim(el, [{ transform: "translateX(0)" }, { transform: "translateX(-4px)" }, { transform: "translateX(4px)" }, { transform: "translateX(0)" }], 240);
+const markTests = (st, ids) => { const now = Date.now() / 1000; st.tests = { ...(st.tests || {}) }; ids.forEach((i) => (st.tests[i] = { state: "queued", at: now })); };
+const pinLocal = (st, id) => {
+  st.pinned = id;
+  if (id) { st.active = id; st.nodes.forEach((x) => (x.active = x.id === id)); }
+};
+const dropLocal = (st, ids) => { const gone = new Set(ids); st.nodes = st.nodes.filter((x) => !gone.has(x.id)); };
 
 // ---------- actions ----------
 $("#refresh").onclick = async () => {
-  try { const r = await api("/api/refresh", "POST"); toast(r.msg); setTimeout(poll, 400); } catch (e) { toast(e.message, true); }
+  const b = $("#refresh");
+  if (!reduced.matches) anim(b.querySelector("svg"), [{ transform: "rotate(0)" }, { transform: "rotate(360deg)" }], 600);
+  const r = await act((st) => (st.phase = "fetching"), () => api("/api/refresh", "POST"), { btn: b });
+  if (r && !r.started) toast(r.msg, "info");
 };
 $("#sysproxy").onclick = async () => {
   const b = $("#sysproxy");
   if (b.classList.contains("busy")) return;
   const on = b.getAttribute("aria-checked") !== "true";
-  b.classList.add("busy");
-  try { await api("/api/sysproxy", "POST", { on }); toast(on ? "Connected: Windows apps go through Juggler" : "Disconnected: Windows proxy restored"); await poll(); }
-  catch (e) { toast(e.message, true); }
-  finally { b.classList.remove("busy"); }
+  if (on && !reduced.matches) anim(b, [{ opacity: 0.55, transform: "scale(1)" }, { opacity: 0, transform: "scale(1.5)" }], 650, { pseudoElement: "::after" });
+  const r = await act((st) => (st.sysproxy = { ...st.sysproxy, on }), () => api("/api/sysproxy", "POST", { on }), { btn: b });
+  if (r) toast(on ? "Connected: Windows apps go through Juggler" : "Disconnected: Windows proxy restored");
 };
 $("#safemode").onclick = async () => {
   const on = $("#safemode").getAttribute("aria-checked") !== "true";
-  try { await api("/api/safemode", "POST", { on }); toast(on ? "Safe mode on" : "Safe mode off: unencrypted configs allowed from the next refresh"); poll(); } catch (e) { toast(e.message, true); }
+  const r = await act((st) => (st.safe_mode = on), () => api("/api/safemode", "POST", { on }), { btn: $("#safemode") });
+  if (r) toast(on ? "Safe mode on" : "Safe mode off: unencrypted configs allowed from the next refresh", "info");
 };
-$("#test-all").onclick = async () => {
+$("#minspeed").onchange = async (ev) => {
+  const kbps = +ev.target.value;
+  const r = await act((st) => (st.min_kbps = kbps), () => api("/api/minspeed", "POST", { kbps }));
+  if (r) toast(kbps ? `Configs slower than ${fmtSpeed(kbps)} won't be used` : "Minimum speed off", "info");
+};
+$("#test-all").onclick = () => {
   if (testsActive()) return;
-  try { const r = await api("/api/test_all", "POST"); toast(r.msg); poll(); } catch (e) { toast(e.message, true); }
+  act((st) => markTests(st, st.nodes.map((n) => n.id)), () => api("/api/test_all", "POST"));
 };
 $("#add-open").onclick = () => { $("#add-modal").hidden = false; $("#add-text").focus(); };
 $("#add-close").onclick = () => ($("#add-modal").hidden = true);
 $("#add-save").onclick = async () => {
-  try {
-    const r = await api("/api/manual", "POST", { text: $("#add-text").value });
-    toast(r.msg); $("#add-text").value = ""; $("#add-modal").hidden = true; setTimeout(poll, 6000);
-  } catch (e) { toast(e.message, true); }
+  const b = $("#add-save");
+  const r = await act(null, () => api("/api/manual", "POST", { text: $("#add-text").value }), { btn: b });
+  if (!r) return;
+  toast(r.msg); $("#add-text").value = ""; $("#add-modal").hidden = true; setTimeout(poll, 3000);
 };
-$("#auto").onclick = async () => { await api("/api/pin", "POST", { id: null }); toast("Back to automatic selection"); poll(); };
+$("#sel-all").onclick = (ev) => {
+  if (ev.target.checked) { S.nodes.forEach((n) => selected.add(n.id)); renderNodes(); } else clearSel();
+};
+$("#bulk-clear").onclick = clearSel;
+$("#bulk-test").onclick = async () => {
+  const ids = [...selected];
+  const r = await act((st) => markTests(st, ids), () => api("/api/test", "POST", { ids }), { btn: $("#bulk-test") });
+  if (r && r.count > 10) toast(`Testing ${r.count} (speed is measured for up to 10 at a time)`, "info");
+};
+$("#bulk-remove").onclick = async () => {
+  if (Date.now() >= bulkArm) {
+    bulkArm = Date.now() + 3000;
+    renderBulk();
+    setTimeout(() => { bulkArm = 0; if (S) renderBulk(); }, 3000);
+    return;
+  }
+  bulkArm = 0;
+  const ids = [...selected];
+  selected.clear(); selAnchor = null;
+  const r = await act((st) => dropLocal(st, ids), () => api("/api/remove", "POST", { ids }));
+  if (r) toast(`Removed ${r.count}`);
+};
+$("#auto").onclick = () => act((st) => (st.pinned = null), () => api("/api/pin", "POST", { id: null }), { btn: $("#auto") });
 
 document.querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => {
   const k = th.dataset.sort;
@@ -385,12 +640,12 @@ document.querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => {
   renderNodes();
 }));
 
-async function useConfig(n) {
-  try { await api("/api/pin", "POST", { id: n.id }); toast(`Using ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
+function useConfig(n, btn) {
+  return act((st) => pinLocal(st, n.id), () => api("/api/pin", "POST", { id: n.id }), { btn });
 }
 
 // Double-click or double-tap a row = Use. Counted by hand rather than with dblclick so
-// touch screens get it too; rows re-render between taps, so the row is tracked by id.
+// touch screens get it too.
 let lastTap = { id: null, at: 0 };
 function rowTap(ev) {
   const tr = ev.target.closest("tr[data-id]");
@@ -401,24 +656,29 @@ function rowTap(ev) {
   if (!double) return;
   const n = S.nodes.find((x) => x.id === id);
   if (!n || n.active) return;
-  if (!n.eligible) { toast("This config isn't working right now", true); return; }
+  if (!n.eligible) { toast("This config isn't working right now", "err"); shake(tr); return; }
   useConfig(n);
 }
-$("#nodes").onmousedown = (ev) => {          // a double-click shouldn't select the row's text
-  if (ev.detail > 1 && !ev.target.closest("button")) ev.preventDefault();
+$("#nodes").onmousedown = (ev) => {          // a double- or shift+click shouldn't select the row's text
+  if ((ev.detail > 1 || ev.shiftKey) && !ev.target.closest("button, input")) ev.preventDefault();
 };
 
 $("#nodes").onclick = async (ev) => {
+  const tr = ev.target.closest("tr[data-id]");
+  if (tr && (ev.target.closest("input[data-sel]") || (ev.shiftKey && !ev.target.closest("button")))) {
+    toggleSel(tr.dataset.id, ev.shiftKey);
+    return;
+  }
   const btn = ev.target.closest("button[data-act]");
   if (!btn) { rowTap(ev); return; }
-  const n = S.nodes.find((x) => x.id === btn.closest("tr").dataset.id);
+  if (!tr) return;
+  const n = S.nodes.find((x) => x.id === tr.dataset.id);
   if (!n) return;
   if (btn.dataset.act === "copy") copy(n.link, "Config copied");
   if (btn.dataset.act === "qr") openModal(`${n.flag} ${regionName(n.country)} · ${n.proto}`, n.link);
   if (btn.dataset.act === "test") {
     if (S.tests?.[n.id] && S.tests[n.id].state !== "done") return;
-    btn.classList.add("testing"); btn.innerHTML = '<span class="spin"></span>Queued';
-    try { await api("/api/test", "POST", { id: n.id }); poll(); } catch (e) { toast(e.message, true); }
+    act((st) => markTests(st, [n.id]), () => api("/api/test", "POST", { ids: [n.id] }));
   }
   if (btn.dataset.act === "remove") {
     if (removeArm.id !== n.id || Date.now() >= removeArm.until) {
@@ -428,17 +688,20 @@ $("#nodes").onclick = async (ev) => {
       return;
     }
     removeArm = { id: null, until: 0 };
-    try { await api("/api/remove", "POST", { id: n.id }); toast(`Removed ${n.flag} ${regionName(n.country)}`); poll(); } catch (e) { toast(e.message, true); }
+    selected.delete(n.id);
+    const r = await act((st) => dropLocal(st, [n.id]), () => api("/api/remove", "POST", { ids: [n.id] }));
+    if (r) toast(`Removed ${n.flag} ${regionName(n.country)}`);
   }
-  if (btn.dataset.act === "use") useConfig(n);
+  if (btn.dataset.act === "use") useConfig(n, btn);
 };
 
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button[data-copy]");
-  if (b) copy($("#" + b.dataset.copy).textContent);
-  if (ev.target.closest("#fw-allow")) {
-    try { await api("/api/firewall/allow", "POST"); toast("Approve the Windows prompt; status updates in a few seconds"); setTimeout(poll, 6000); }
-    catch (e) { toast(e.message, true); }
+  if (b) copy($("#" + b.dataset.copy).textContent, "Copied", b);
+  const fw = ev.target.closest("#fw-allow");
+  if (fw) {
+    const r = await act(null, () => api("/api/firewall/allow", "POST"), { btn: fw });
+    if (r) { toast("Approve the Windows prompt; status updates in a few seconds", "info"); setTimeout(poll, 6000); }
   }
 });
 
@@ -448,20 +711,28 @@ function openModal(title, link) {
   $("#modal-qr").src = qrSrc(link);
   $("#modal-link").textContent = link;
   $("#modal").hidden = false;
-  $("#modal-copy").onclick = () => copy(link, "Config copied");
+  $("#modal-copy").onclick = () => copy(link, "Config copied", $("#modal-copy"));
 }
 $("#modal-close").onclick = () => ($("#modal").hidden = true);
 $("#modal").onclick = (e) => { if (e.target.id === "modal") $("#modal").hidden = true; };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { $("#modal").hidden = true; $("#add-modal").hidden = true; } });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = !$("#modal").hidden || !$("#add-modal").hidden;
+  $("#modal").hidden = true; $("#add-modal").hidden = true;
+  if (!open && selected.size) clearSel();
+});
 
 // ---------- whitelist ----------
 let WL = [];
 function renderWL() {
-  $("#wl").innerHTML = WL.map((e, i) => `<span class="chip">${esc(e)}<button title="Remove" data-i="${i}">×</button></span>`).join("");
+  setHTML($("#wl"), WL.map((e, i) => `<span class="chip">${esc(e)}<button title="Remove" data-i="${i}">×</button></span>`).join(""));
 }
+// The chip appears (or goes) at once; xray checks the list and a rejected one comes back.
 async function saveWL(entries) {
-  try { const r = await api("/api/whitelist", "PUT", { entries }); WL = r.entries; renderWL(); toast("Whitelist applied"); return true; }
-  catch (e) { toast("Rejected: " + e.message, true); return false; }
+  const was = WL;
+  WL = entries; renderWL();
+  try { const r = await api("/api/whitelist", "PUT", { entries }); WL = r.entries; renderWL(); return true; }
+  catch (e) { WL = was; renderWL(); toast("Rejected: " + e.message, "err"); shake($("#wl-input")); return false; }
 }
 $("#wl").onclick = (ev) => {
   const b = ev.target.closest("button[data-i]");
@@ -480,8 +751,8 @@ for (const which of ["sources", "bridges"]) {
   api(`/api/${which}`).then((r) => ($(`#${which}-text`).value = r.lines.join("\n")));
   $(`#${which}-save`).onclick = async () => {
     const lines = $(`#${which}-text`).value.split("\n");
-    try { await api(`/api/${which}`, "PUT", { lines }); toast(which === "bridges" ? "Bridges saved · Tor restarting" : "Sources saved · used from the next refresh"); }
-    catch (e) { toast(e.message, true); }
+    const r = await act(null, () => api(`/api/${which}`, "PUT", { lines }), { btn: $(`#${which}-save`) });
+    if (r) { flashLabel($(`#${which}-save`), "✓ Saved"); toast(which === "bridges" ? "Bridges saved · Tor restarting" : "Sources saved · used from the next refresh", "info"); }
   };
 }
 
@@ -524,25 +795,22 @@ $("#filters").onclick = (ev) => {
 };
 $("#connlog").onclick = async () => {
   const on = !(S && S.connlog && S.connlog.on);
-  try {
-    await api("/api/connlog", "POST", { on });
-    toast(on ? "Recording connections (Connections filter shows only those)" : "Stopped recording connections");
-    poll();
-  } catch (e) { toast(e.message, true); }
+  const r = await act((st) => (st.connlog = { ...(st.connlog || { count: 0 }), on }), () => api("/api/connlog", "POST", { on }));
+  if (r && on) toast("Recording connections (the Connections filter shows only those)", "info");
 };
 
 $("#site-form").onsubmit = async (ev) => {
   ev.preventDefault();
   const v = $("#site-input").value.trim();
   if (!v) return;
-  try {
-    const r = await api("/api/sitecheck", "POST", { url: v });
-    $("#site-input").value = "";
-    $("#site-input").blur();
-    siteSel = r.host;
-    sort = { key: "site", dir: 1 };
-    poll();
-  } catch (e) { toast(e.message, true); }
+  const inp = $("#site-input");
+  inp.classList.add("busy");
+  const r = await act(null, () => api("/api/sitecheck", "POST", { url: v }));
+  inp.classList.remove("busy");
+  if (!r) { shake(inp); return; }
+  inp.value = ""; inp.blur();
+  siteSel = r.host;
+  sort = { key: "site", dir: 1 };
 };
 function openTab(host) {
   siteSel = host || null;
@@ -554,7 +822,8 @@ $("#tabs").onclick = async (ev) => {
   if (!tab) return;
   const host = tab.dataset.tab;
   if (ev.target.closest("[data-sact=forget]")) {
-    try { await api("/api/sitecheck", "DELETE", { host }); if (siteSel === host) openTab(null); poll(); } catch (e) { toast(e.message, true); }
+    if (siteSel === host) openTab(null);
+    act((st) => (st.sitechecks = (st.sitechecks || []).filter((h) => h.host !== host)), () => api("/api/sitecheck", "DELETE", { host }));
     return;
   }
   openTab(host);
@@ -566,7 +835,8 @@ $("#tabs").onkeydown = (ev) => {
 $("#site-rerun").onclick = async () => {
   const h = selectedSite();
   if (!h) return;
-  try { await api("/api/sitecheck", "POST", { url: h.url }); poll(); } catch (e) { toast(e.message, true); }
+  act((st) => { const x = (st.sitechecks || []).find((y) => y.host === h.host); if (x) { x.state = "queued"; x.results = {}; } },
+      () => api("/api/sitecheck", "POST", { url: h.url }), { btn: $("#site-rerun") });
 };
 $("#site-input").onfocus = (ev) => { ev.target.placeholder = "chatgpt.com  ↵"; };
 $("#site-input").onblur = (ev) => { ev.target.placeholder = "+ Check a site"; };

@@ -144,3 +144,80 @@ def test_health_is_pass_rate_times_site_coverage():
     assert scoring.health(n) == pytest.approx(0.8)           # Instagram fails; YouTube counts double: 4/5
     scoring.record(n, {"ok": False}, 1002)
     assert scoring.health(n) == pytest.approx(0.65 * 0.8)
+
+
+def test_a_slow_reading_counts_and_unmeasured_is_not_neutral_fast():
+    slow, fresh = node(1), node(2)
+    for n in (slow, fresh):
+        for i in range(4):
+            scoring.record(n, ok(yt=True), T0 + i)
+    scoring.record(slow, {"kbps": 100}, T0 + 5)
+    assert slow.speed_kbps == 100 and slow.checks == 4         # speed evidence alone isn't a check
+    assert fresh.speed_kbps == -1
+    fast = node(3)
+    for i in range(4):
+        scoring.record(fast, ok(yt=True), T0 + i)
+    scoring.record(fast, {"kbps": 3000}, T0 + 5)
+    assert scoring.score(fast) > scoring.score(fresh) > scoring.score(slow)
+
+
+def test_a_lower_bound_lifts_a_low_average_but_never_sets_or_lowers_one():
+    n = node()
+    scoring.record(n, {"kbps_min": 900}, T0)
+    assert n.speed_kbps == -1                                  # no measurement yet
+    scoring.record(n, {"kbps": 100}, T0)
+    for i in range(8):
+        scoring.record(n, {"kbps_min": 900}, T0 + i)
+    assert 800 < n.speed_kbps <= 900                           # recovered toward the bound
+    scoring.record(n, {"kbps": 5000}, T0 + 9)
+    before = n.kbps_ewma
+    scoring.record(n, {"kbps_min": 900}, T0 + 10)
+    assert n.kbps_ewma == before
+
+
+@pytest.fixture
+def floor(monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+
+
+def working(i, kbps=None):
+    n = node(i)
+    for k in range(4):
+        scoring.record(n, ok(yt=True), T0 + k)
+    if kbps is not None:
+        scoring.record(n, {"kbps": kbps}, T0 + 5)
+    return n
+
+
+def test_a_config_below_the_minimum_speed_is_kept_but_not_used(floor):
+    slow, fast, unmeasured = working(1, 100), working(2, 2000), working(3)
+    assert scoring.too_slow(slow) and not scoring.eligible(slow)
+    assert not scoring.is_dead(slow, T0 + 100_000)              # not retired
+    assert [n.id for n in scoring.rank([slow, fast, unmeasured])] == [fast.id, unmeasured.id]
+
+
+def test_minimum_speed_off_lets_slow_configs_in(monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 0)
+    assert scoring.eligible(working(1, 100))
+
+
+def test_when_every_config_is_slow_slow_beats_nothing(floor):
+    a, b = working(1, 100), working(2, 300)
+    assert {n.id for n in scoring.rank([a, b])} == {a.id, b.id}
+
+
+def test_the_config_in_use_is_dropped_once_it_measures_slow(floor):
+    cur, other = working(1, 2000), working(2, 2000)
+    assert scoring.choose_primary(cur, scoring.rank([cur, other]), None)[0] is cur
+    for _ in range(6):
+        scoring.record(cur, {"kbps": 80}, T0 + 10)
+    chosen, why = scoring.choose_primary(cur, scoring.rank([cur, other]), None)
+    assert chosen is other and "below 500 kbps" in why
+    assert scoring.choose_primary(cur, scoring.rank([cur, other]), cur)[0] is cur   # your pin wins
+
+
+def test_a_slow_config_earns_its_way_back(floor):
+    n = working(1, 100)
+    for k in range(10):
+        scoring.record(n, {"kbps": 1500}, T0 + 10 + k)
+    assert scoring.eligible(n)

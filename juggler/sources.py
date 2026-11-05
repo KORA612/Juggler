@@ -29,7 +29,7 @@ STATIC_MIN_AGE = 60 * 60     # GitHub dumps change every ~3-6 h: don't even ask 
 
 # Channels picked 2026-10-03 by probing ~90 handles found in config names: public
 # preview, posted within the last day, many configs per page, mostly VLESS+REALITY/TLS.
-TELEGRAM_CHANNELS = [
+CHANNELS_2026_10 = [
     "ConfigsHUB", "farah_vpn", "meliproxyy", "soskeynet", "v2ray313", "icv2ray", "i10vpn",
     "v2ray_confiig", "outline_vpn", "prrofile_purple", "v2ray_alpha", "shh_proxy",
     "proxymtalpha", "marambashi", "farazv2ray", "freakconfig", "v2rayng_matsuri",
@@ -37,14 +37,27 @@ TELEGRAM_CHANNELS = [
     "iran_v2ray1", "chillguy_vpn", "tootffarangi", "filembad", "v2rayng_fast", "nexus_panell",
     "vasl_bashim",
 ]
+# Added 2026-11-06 from ~570 candidates (GitHub collectors' channel lists, web search): public
+# preview, posted within the week, ranked by configs no channel above carries. v2ray_collector
+# is the only one with tuic.
+CHANNELS_2026_11 = [
+    "vpsave", "configv2rayng", "v2ray_youtube", "v2ray_configs_pools", "planb_net",
+    "outlineopenkey", "daily_configs", "hopev2ray", "proxy_online_net", "v2raych",
+    "v2ray_collector",
+]
+TELEGRAM_CHANNELS = CHANNELS_2026_10 + CHANNELS_2026_11
 GITHUB_SOURCES = [
     "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/All_Configs_Sub.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_base64_Sub.txt",
 ]
 DEFAULT_SOURCES = [f"https://t.me/s/{c}" for c in TELEGRAM_CHANNELS] + GITHUB_SOURCES
-# What sources.txt contained before the curated list existed; upgraded automatically.
-LEGACY_DEFAULT = ["https://t.me/s/ConfigsHUB"] + GITHUB_SOURCES
+# Earlier default lists: a sources.txt still equal to one of them was never edited by hand,
+# so it's upgraded to the current default automatically. Edited lists are left alone.
+LEGACY_DEFAULTS = [
+    ["https://t.me/s/ConfigsHUB"] + GITHUB_SOURCES,
+    [f"https://t.me/s/{c}" for c in CHANNELS_2026_10] + GITHUB_SOURCES,
+]
 
 
 def is_telegram(url):

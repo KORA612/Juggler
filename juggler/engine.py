@@ -9,7 +9,8 @@ budget, and only ever *add evidence* to the pool:
   reserve    every 10 min: full check (YouTube/Google/Instagram/Telegram) of the rest
   speed      every 30 min: sustained speed test of the best few
   sample     every hour:   re-test retired configs, to measure false negatives
-  watch      every 20 s:   (own thread) real traffic through the config in use
+  watch      every 20 s:   (own thread) real traffic through the config in use, and
+                           every ~2 min a short download to check it is still fast enough
 
 A config leaves the pool only after repeated failures over time (scoring.py), the
 config in use is sticky, and xray is updated in place, so nothing is cut off at a
@@ -41,8 +42,10 @@ RESERVE_EVERY, RESERVE_BATCH = 10 * 60, 40
 SPEED_EVERY, SPEED_TOP = 30 * 60, 5
 SAMPLE_EVERY, SAMPLE_SIZE = 60 * 60, 30
 WATCH_EVERY = 20
+WATCH_SPEED_TICKS, WATCH_SPEED_S = 6, 3   # speed of the config in use every 6th watch (~2 min)
 TEST_SHOW_FOR = 12       # seconds a finished dashboard test stays on its row
 SITE_HISTORY = 10        # sites checked from the dashboard, newest first
+TEST_SPEED_MAX = 10      # a manual Test also measures speed (up to 3 MB each) for this many
 POOL_MAX = 150           # scored configs kept
 ACTIVE = 20              # configs loaded into xray
 QUEUE_MAX = 6000
@@ -125,14 +128,16 @@ class Engine:
         self.due = {}                        # job -> next run (epoch)
         self.tests = {}                      # dashboard tests: id -> {state, at, ok, ms, sites}
         self._online = (0, True)
+        self._slow = (None, [])              # (config in use, its readings below the minimum)
         self._bw = []                        # (time, bytes) samples for MB/h
         self._saved_at = 0
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
                       "last_fetch": 0, "report": {}, "stats": {}, "pinned": None,
                       "dead": {}, "sitechecks": [], "last_sub": None, "fn": None, "last_switch": None,
-                      "connlog": False}
+                      "connlog": False, "min_kbps": scoring.DEFAULT_MIN_KBPS}
         self._ensure_files()
         self._load()
+        scoring.min_kbps = int(self.state.get("min_kbps") or 0)
         self.connlog = connlog.ConnLog(self._route_label)
         self.connlog.enabled = bool(self.state.get("connlog"))
         self.main.on_line = self.connlog.feed
@@ -140,7 +145,7 @@ class Engine:
     # ---------- persistence ----------
 
     def _ensure_files(self):
-        if not os.path.exists(SOURCES_TXT) or read_lines(SOURCES_TXT) == sources.LEGACY_DEFAULT:
+        if not os.path.exists(SOURCES_TXT) or read_lines(SOURCES_TXT) in sources.LEGACY_DEFAULTS:
             write_lines(SOURCES_TXT, sources.DEFAULT_SOURCES, SOURCES_HEADER)
         if not os.path.exists(WHITELIST_TXT):
             write_lines(WHITELIST_TXT, DEFAULT_WHITELIST, WHITELIST_HEADER)
@@ -160,6 +165,8 @@ class Engine:
         for h in self.state["sitechecks"]:          # a check cut short by a restart
             if h.get("state") != "done":
                 h.update(state="done", interrupted=True)
+            h["results"] = {k: {"ms": v, "kbps": None} if isinstance(v, (int, float)) else v
+                            for k, v in h.get("results", {}).items()}     # before 1.6.7: ms only
         for d in saved.get("pool", saved.get("nodes", [])):
             n = links.parse(d.get("link", ""))
             if n:
@@ -180,9 +187,14 @@ class Engine:
 
     def start(self):
         sp = self.state["sysproxy"]
-        if sp.get("on") and sysproxy.is_ours(HTTP_PORT):
-            log.warn("PROXY", "restoring system proxy left on by a previous crash")
-            self.set_sysproxy(False)
+        if sysproxy.SUPPORTED and sysproxy.is_ours(HTTP_PORT):
+            if sp.get("on"):
+                log.warn("PROXY", "restoring system proxy left on by a previous crash")
+                self.set_sysproxy(False)
+            elif sysproxy.clear_leftover(HTTP_PORT):
+                # state.json says off (lost, stale, or shared with a WSL run) but Windows
+                # still points at Juggler: clear it rather than trust the file.
+                log.warn("PROXY", "removed a leftover Juggler system proxy")
         if not self.tor.available():
             log.warn("TOR", "Tor not installed; the Tor fallback is off")
         warm = sorted(self.pool.values(), key=scoring.score, reverse=True)[:ACTIVE]
@@ -437,8 +449,13 @@ class Engine:
                                        for s in ("google", "ig", "tg")))
 
     def _job_speed(self):
+        """The best few, plus the slow configs closest to the minimum: throttling comes
+        and goes, and this is how a slow config earns its way back."""
         with self.lock:
             ranked = scoring.rank(self.pool.values())[:SPEED_TOP]
+            slow = sorted((n for n in self.pool.values() if scoring.usable(n) and scoring.too_slow(n)
+                           and n not in ranked), key=lambda n: n.kbps_ewma, reverse=True)[:SPEED_TOP]
+            ranked += slow
         if not ranked:
             return
         self.phase = "speed"
@@ -482,9 +499,10 @@ class Engine:
 
     # dashboard-requested jobs
 
-    def _mark_tests(self, nodes, res=None, counted=True):
+    def _mark_tests(self, nodes, res=None, counted=True, speeds=None):
         """Progress for the dashboard rows. ok=None: unknown (no answer in time, or our
-        own internet was down), which the row must not show as a failed config."""
+        own internet was down), which the row must not show as a failed config. The
+        speed shown is the one measured by this test when there is one."""
         now = time.time()
         with self.lock:
             for n in nodes:
@@ -492,8 +510,13 @@ class Engine:
                     self.tests[n.id] = {"state": "running", "at": now}
                     continue
                 r = res.get(n.id) or {}
+                fresh = (speeds or {}).get(n.id, r.get("kbps"))
+                if fresh is None and n.speed_kbps >= 0:
+                    fresh = n.speed_kbps
                 self.tests[n.id] = {"state": "done", "at": now, "ok": r.get("ok") if counted else None,
-                                    "ms": r.get("ms"), "sites": r.get("sites", {}), "offline": not counted}
+                                    "ms": r.get("ms"), "sites": r.get("sites", {}), "offline": not counted,
+                                    "kbps": fresh if r.get("ok") else None,
+                                    "slow": scoring.too_slow(n)}
 
     def _job_test(self, ids):
         with self.lock:
@@ -503,16 +526,34 @@ class Engine:
         self.phase = "testing"
         self._mark_tests(nodes)
         res = tester.check(nodes, "full", budget=60)
-        self._mark_tests(nodes, res, self._record(nodes, res, "manual test"))
+        counted = self._record(nodes, res, "manual test")
+        passed = [n for n in nodes if res.get(n.id, {}).get("ok")] if counted else []
+        if passed and len(passed) <= TEST_SPEED_MAX:
+            # then a sustained download, so the speed shown is measured now, not guessed
+            now = time.time()
+            with self.lock:
+                self.tests.update({n.id: {"state": "speed", "at": now} for n in passed})
+            self.phase = "speed"
+            sp = tester.check(passed, "speed", budget=40)
+            with self.lock:
+                for n in passed:
+                    if sp.get(n.id):
+                        scoring.record(n, {k: v for k, v in sp[n.id].items() if k != "ok"}, time.time())
+            speeds = {i: r.get("kbps", r.get("kbps_min")) for i, r in sp.items()}
+        else:
+            speeds = {}
+        self._mark_tests(nodes, res, counted, speeds)
         for n in nodes:
             r = res.get(n.id, {})
             s = " ".join(f"{k}{'✓' if v else '✗'}" for k, v in r.get("sites", {}).items())
+            speed = f" · {n.speed_kbps / 1000:.1f} Mbps" if n.speed_kbps >= 0 else ""
             log.info(TAG, f"test {scoring.label(n)} · {'OK' if r.get('ok') else 'FAILED'}"
-                          + (f" · {r.get('ms')} ms · {s}" if r.get("ok") else ""))
+                          + (f" · {r.get('ms')} ms{speed}{' (below the minimum)' if scoring.too_slow(n) else ''} · {s}"
+                             if r.get("ok") else ""))
 
     def _job_site_check(self, host):
-        """Can each config reach a site the user named? Informational only: it never
-        changes Health or ranking."""
+        """Can each config reach a site the user named, how fast does it answer and how
+        fast does it download? Informational only: it never changes Health or ranking."""
         with self.lock:
             entry = next((h for h in self.state["sitechecks"] if h["host"] == host), None)
             nodes = list(self.pool.values())
@@ -530,10 +571,10 @@ class Engine:
                     entry.update(state="done", offline=True, results={}, reach=0, at=time.time())
                 return
             with self.lock:
-                entry["results"].update({n.id: res[n.id]["ms"] if res.get(n.id, {}).get("ok") else None
-                                         for n in part})
+                entry["results"].update({n.id: {"ms": res[n.id]["ms"], "kbps": res[n.id].get("kbps")}
+                                         if res.get(n.id, {}).get("ok") else None for n in part})
         with self.lock:
-            reach = sum(1 for ms in entry["results"].values() if ms is not None)
+            reach = sum(1 for r in entry["results"].values() if r is not None)
             entry.update(state="done", reach=reach, at=time.time())
         log.info(TAG, f"site check {host} · {reach}/{len(nodes)} configs reach it")
         self.save(force=True)
@@ -654,13 +695,49 @@ class Engine:
         except Exception:  # noqa: BLE001
             return False, None
 
+    def _watch_speed(self):
+        """A short download through the config in use. Sized so that a link below the
+        minimum can't finish it within WATCH_SPEED_S, making the reading a real
+        measurement (~280 KB at 500 kbps). Two readings below the minimum in a row are
+        clear enough to replace the slow-moving average, so the switch happens now
+        instead of after a dozen readings."""
+        floor, n = scoring.min_kbps, self.primary
+        if not floor or n is None:
+            return
+        limit = max(128_000, int(floor * 125 * WATCH_SPEED_S * 1.5))
+        r = None
+        for url in tester.SPEED_URLS:
+            r = tester._speed_once(SELF_HTTP_PORT, url.format(n=limit), limit, WATCH_SPEED_S)
+            if r is not None:
+                break
+        if r is None:
+            return                                           # no answer: the 204 probe judges that
+        who, slow = self._slow
+        if who is not n:
+            slow = []
+        slow = slow + [r["kbps"]] if r.get("kbps", floor) < floor else []
+        self._slow = (n, slow)
+        with self.lock:
+            scoring.record(n, r, time.time())
+            if len(slow) < 2:
+                return
+            n.kbps_ewma = sum(slow[-2:]) / 2
+            n.speed_kbps = int(n.kbps_ewma)
+        self._slow = (n, [])
+        log.warn(TAG, f"{scoring.label(n)} is too slow ({n.speed_kbps} kbps, minimum {floor}) → switching"
+                 if self.state.get("pinned") != n.id else
+                 f"{scoring.label(n)} is too slow ({n.speed_kbps} kbps) but pinned by you, so it stays")
+        self._settle()
+
     def _watch(self):
         """Every 20 s, real traffic through the config in use. Two failures in a row
         (~40 s) make choose_primary move to the next best config, live, no restart."""
+        tick = 0
         while not self.stopping:
             time.sleep(WATCH_EVERY)
             if self.stopping or self.primary is None:
                 continue
+            tick += 1
             if not self.main.alive():
                 log.warn(TAG, "main xray is not running → restarting it")
                 self.main.apply(self.active, read_lines(WHITELIST_TXT), self.tor.available(), self.primary)
@@ -670,6 +747,11 @@ class Engine:
                 with self.lock:
                     if self.primary is not None:
                         scoring.record(self.primary, {"ok": True, "ms": ms}, time.time())
+                if tick % WATCH_SPEED_TICKS == 0:
+                    try:
+                        self._watch_speed()
+                    except Exception as e:  # noqa: BLE001 - the watchdog must not die
+                        log.error(TAG, f"speed watch crashed: {type(e).__name__}: {e}")
                 continue
             if not self.online():
                 continue                                   # our internet, not the config
@@ -693,13 +775,17 @@ class Engine:
         self.wake.set()
         return True
 
-    def test(self, node_id):
-        if node_id not in self.pool:
-            return False
+    def test(self, ids):
+        """Test one config or a selection (a list of ids). -> how many were queued."""
+        ids = [ids] if isinstance(ids, str) else list(ids or [])
         with self.lock:
-            self.tests[node_id] = {"state": "queued", "at": time.time()}
-        self.request("test", [node_id])
-        return True
+            ids = [i for i in dict.fromkeys(ids) if i in self.pool
+                   and self.tests.get(i, {}).get("state") in (None, "done")]
+            now = time.time()
+            self.tests.update({i: {"state": "queued", "at": now} for i in ids})
+        if ids:
+            self.request("test", ids)
+        return len(ids)
 
     def test_all(self):
         with self.lock:
@@ -747,18 +833,44 @@ class Engine:
             self.request("manual", list(nodes.values()))
         return len(found), len(nodes)
 
-    def remove(self, node_id):
+    def remove(self, ids):
+        """Remove one config or a selection (a list of ids). -> how many were removed."""
+        ids = [ids] if isinstance(ids, str) else list(ids or [])
+        gone = []
         with self.lock:
-            n = self.pool.get(node_id)
-            if n is None:
-                return False
-            if self.state.get("pinned") == node_id:
-                self.state["pinned"] = None
-            del self.pool[node_id]
-            # Just out of the pool, not retired: if a source still lists it, the next
-            # fetch may queue it again like any other config.
-            self.state["dead"].pop(node_id, None)
-        log.info(TAG, f"removed {scoring.label(n)}")
+            for node_id in dict.fromkeys(ids):
+                n = self.pool.pop(node_id, None)
+                if n is None:
+                    continue
+                if self.state.get("pinned") == node_id:
+                    self.state["pinned"] = None
+                # Just out of the pool, not retired: if a source still lists it, the next
+                # fetch may queue it again like any other config.
+                self.state["dead"].pop(node_id, None)
+                gone.append(n)
+        if not gone:
+            return 0
+        log.info(TAG, f"removed {scoring.label(gone[0])}" if len(gone) == 1 else
+                 f"removed {len(gone)} configs: " + ", ".join(scoring.label(n) for n in gone[:4])
+                 + (" …" if len(gone) > 4 else ""))
+        self._settle()
+        self.save(force=True)
+        return len(gone)
+
+    SPEED_FLOORS = (0, 250, 500, 1000, 2000, 3000)
+
+    def set_min_speed(self, kbps):
+        try:
+            kbps = int(kbps)
+        except (TypeError, ValueError):
+            return False
+        if kbps not in self.SPEED_FLOORS:
+            return False
+        self.state["min_kbps"] = scoring.min_kbps = kbps
+        with self.lock:
+            slow = sum(1 for n in self.pool.values() if scoring.usable(n) and scoring.too_slow(n))
+        log.info(TAG, f"minimum speed {kbps} kbps · {slow} config(s) below it are kept but not used"
+                 if kbps else "minimum speed off")
         self._settle()
         self.save(force=True)
         return True
@@ -781,11 +893,12 @@ class Engine:
         if on:
             if not sp.get("on"):
                 sp["saved"] = sysproxy.read()
-            sysproxy.enable(HTTP_PORT, sysproxy.bypass_list(read_lines(WHITELIST_TXT)))
+            sysproxy.enable()
             sp["on"] = True
-            log.ok("PROXY", f"Windows system proxy → 127.0.0.1:{HTTP_PORT}")
+            log.ok("PROXY", f"Windows system proxy → 127.0.0.1:{HTTP_PORT} (via proxy script)")
         else:
-            saved = sp.get("saved") or {"ProxyEnable": 0}
+            # Snapshots taken before the proxy script have no AutoConfigURL: remove ours then.
+            saved = {"AutoConfigURL": None, **(sp.get("saved") or {"ProxyEnable": 0})}
             sysproxy.write(saved)
             sp["on"] = False
             log.ok("PROXY", "Windows system proxy restored")
@@ -805,7 +918,7 @@ class Engine:
         log.ok(TAG, f"whitelist saved · {len(entries)} entries")
         self.main.apply(self.active, entries, self.tor.available(), self.primary)
         if self.state["sysproxy"].get("on"):
-            sysproxy.set_bypass(sysproxy.bypass_list(entries))
+            sysproxy.reload()
         return True, ""
 
     def text_file(self, which):
@@ -840,6 +953,9 @@ class Engine:
             rest = sorted((n for n in self.pool.values() if n not in ranked), key=scoring.score, reverse=True)
             return ranked, rest
 
+    def pac(self):
+        return sysproxy.pac(HTTP_PORT, sysproxy.bypass_list(read_lines(WHITELIST_TXT)))
+
     def subscription(self, client_ip=""):
         ranked, _ = self._ranked_view()
         nodes = ranked[:SUB_MAX]
@@ -869,6 +985,7 @@ class Engine:
         for n in ranked + rest:
             d = n.to_dict()
             d.update(active=n.id == primary, in_balancer=n.id in loaded, eligible=n in ranked,
+                     slow=scoring.too_slow(n),
                      score=round(100 * scoring.score(n)), health=round(100 * scoring.health(n)),
                      sites={k: round(v, 2) for k, v in n.sites.items()})
             nodes.append(d)
@@ -898,6 +1015,7 @@ class Engine:
                     "status": self.tor.status(), "progress": self.tor.progress,
                     "bridges": len(self.text_file("bridges"))},
             "safe_mode": self.state.get("safe_mode", True),
+            "min_kbps": scoring.min_kbps, "speed_floors": self.SPEED_FLOORS,
             "connlog": {"on": self.connlog.enabled, "count": self.connlog.count},
             "sysproxy": {"supported": sysproxy.SUPPORTED, "on": self.state["sysproxy"].get("on", False),
                          "wsl": IS_WSL},

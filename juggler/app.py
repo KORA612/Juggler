@@ -1,4 +1,5 @@
-"""Flask dashboard + JSON API. Everything except /sub is localhost-only."""
+"""Flask dashboard + JSON API. Everything except /sub and /ping is localhost-only."""
+import ipaddress
 import json
 import logging
 import queue
@@ -9,16 +10,43 @@ from flask import Flask, Response, abort, jsonify, render_template, request
 
 from . import firewall, log
 
+CSRF_HEADER = "X-Juggler"
+
+
+def host_ok(host):
+    """True for an IP address or localhost (any port), the only names Juggler is reached by."""
+    name = host.strip().lower()
+    if name.startswith("["):                       # [::1]:8765
+        name = name[1:].partition("]")[0]
+    elif name.count(":") == 1:                     # 127.0.0.1:8765 / localhost:8765
+        name = name.partition(":")[0]
+    if name == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
 
 def create_app(engine):
     app = Flask(__name__)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     @app.before_request
-    def local_only():
+    def guard():
+        # DNS rebinding: a website can point its own name at 127.0.0.1, and then the browser
+        # treats Juggler as that site. Its requests still carry the site's name in Host, so
+        # only an IP address or "localhost" is accepted.
+        if not host_ok(request.host):
+            abort(403)
         if request.path in ("/sub", "/ping"):
             return None
         if request.remote_addr not in ("127.0.0.1", "::1"):
+            abort(403)
+        # Cross-site requests: any page can send a plain POST to localhost, but it can't add a
+        # custom header without a CORS preflight, which Juggler never approves.
+        if request.method not in ("GET", "HEAD") and request.headers.get(CSRF_HEADER) != "1":
             abort(403)
 
     @app.after_request
@@ -53,6 +81,11 @@ def create_app(engine):
         engine.set_safe_mode(bool(body().get("on")))
         return jsonify(ok=True)
 
+    @app.post("/api/minspeed")
+    def minspeed():
+        ok = engine.set_min_speed(body().get("kbps"))
+        return jsonify(ok=ok, msg="" if ok else "unknown speed"), (200 if ok else 400)
+
     @app.post("/api/pin")
     def pin():
         ok = engine.pin(body().get("id"))
@@ -72,10 +105,14 @@ def create_app(engine):
     def sitecheck_forget():
         return jsonify(ok=engine.site_forget(body().get("host", "")))
 
+    def ids():
+        b = body()
+        return b.get("ids") if isinstance(b.get("ids"), list) else [b.get("id", "")]
+
     @app.post("/api/test")
-    def test_one():
-        ok = engine.test(body().get("id", ""))
-        return jsonify(ok=ok, msg="testing…" if ok else "unknown config"), (200 if ok else 400)
+    def test_some():
+        n = engine.test(ids())
+        return jsonify(ok=bool(n), count=n, msg=f"testing {n}…" if n else "nothing to test"), (200 if n else 400)
 
     @app.post("/api/test_all")
     def test_all():
@@ -92,8 +129,8 @@ def create_app(engine):
 
     @app.post("/api/remove")
     def remove():
-        ok = engine.remove(body().get("id", ""))
-        return jsonify(ok=ok), (200 if ok else 400)
+        n = engine.remove(ids())
+        return jsonify(ok=bool(n), count=n), (200 if n else 400)
 
     @app.get("/api/whitelist")
     def whitelist_get():
@@ -151,6 +188,12 @@ def create_app(engine):
                         "<h2 style='color:#34d399'>✓ This device can reach Juggler</h2>"
                         "<p>If v2rayNG still says <b>Failure</b>, wait for the first configs "
                         "to be found, then press Update again.</p>", mimetype="text/html")
+
+    @app.get("/proxy.pac")
+    def proxy_pac():
+        """Windows' system proxy points here while connected. When Juggler isn't running the
+        script can't load, so Windows goes direct instead of losing the internet."""
+        return Response(engine.pac(), mimetype="application/x-ns-proxy-autoconfig")
 
     @app.get("/sub")
     def sub():
