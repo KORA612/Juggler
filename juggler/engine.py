@@ -9,7 +9,8 @@ budget, and only ever *add evidence* to the pool:
   reserve    every 10 min: full check (YouTube/Google/Instagram/Telegram) of the rest
   speed      every 30 min: sustained speed test of the best few
   sample     every hour:   re-test retired configs, to measure false negatives
-  watch      every 20 s:   (own thread) real traffic through the config in use
+  watch      every 20 s:   (own thread) real traffic through the config in use, and
+                           every ~2 min a short download to check it is still fast enough
 
 A config leaves the pool only after repeated failures over time (scoring.py), the
 config in use is sticky, and xray is updated in place, so nothing is cut off at a
@@ -41,6 +42,7 @@ RESERVE_EVERY, RESERVE_BATCH = 10 * 60, 40
 SPEED_EVERY, SPEED_TOP = 30 * 60, 5
 SAMPLE_EVERY, SAMPLE_SIZE = 60 * 60, 30
 WATCH_EVERY = 20
+WATCH_SPEED_TICKS, WATCH_SPEED_S = 6, 3   # speed of the config in use every 6th watch (~2 min)
 TEST_SHOW_FOR = 12       # seconds a finished dashboard test stays on its row
 SITE_HISTORY = 10        # sites checked from the dashboard, newest first
 POOL_MAX = 150           # scored configs kept
@@ -125,6 +127,7 @@ class Engine:
         self.due = {}                        # job -> next run (epoch)
         self.tests = {}                      # dashboard tests: id -> {state, at, ok, ms, sites}
         self._online = (0, True)
+        self._slow = (None, [])              # (config in use, its readings below the minimum)
         self._bw = []                        # (time, bytes) samples for MB/h
         self._saved_at = 0
         self.state = {"safe_mode": True, "sysproxy": {"on": False, "saved": None},
@@ -660,13 +663,49 @@ class Engine:
         except Exception:  # noqa: BLE001
             return False, None
 
+    def _watch_speed(self):
+        """A short download through the config in use. Sized so that a link below the
+        minimum can't finish it within WATCH_SPEED_S, making the reading a real
+        measurement (~280 KB at 500 kbps). Two readings below the minimum in a row are
+        clear enough to replace the slow-moving average, so the switch happens now
+        instead of after a dozen readings."""
+        floor, n = scoring.min_kbps, self.primary
+        if not floor or n is None:
+            return
+        limit = max(128_000, int(floor * 125 * WATCH_SPEED_S * 1.5))
+        r = None
+        for url in tester.SPEED_URLS:
+            r = tester._speed_once(SELF_HTTP_PORT, url.format(n=limit), limit, WATCH_SPEED_S)
+            if r is not None:
+                break
+        if r is None:
+            return                                           # no answer: the 204 probe judges that
+        who, slow = self._slow
+        if who is not n:
+            slow = []
+        slow = slow + [r["kbps"]] if r.get("kbps", floor) < floor else []
+        self._slow = (n, slow)
+        with self.lock:
+            scoring.record(n, r, time.time())
+            if len(slow) < 2:
+                return
+            n.kbps_ewma = sum(slow[-2:]) / 2
+            n.speed_kbps = int(n.kbps_ewma)
+        self._slow = (n, [])
+        log.warn(TAG, f"{scoring.label(n)} is too slow ({n.speed_kbps} kbps, minimum {floor}) → switching"
+                 if self.state.get("pinned") != n.id else
+                 f"{scoring.label(n)} is too slow ({n.speed_kbps} kbps) but pinned by you, so it stays")
+        self._settle()
+
     def _watch(self):
         """Every 20 s, real traffic through the config in use. Two failures in a row
         (~40 s) make choose_primary move to the next best config, live, no restart."""
+        tick = 0
         while not self.stopping:
             time.sleep(WATCH_EVERY)
             if self.stopping or self.primary is None:
                 continue
+            tick += 1
             if not self.main.alive():
                 log.warn(TAG, "main xray is not running → restarting it")
                 self.main.apply(self.active, read_lines(WHITELIST_TXT), self.tor.available(), self.primary)
@@ -676,6 +715,11 @@ class Engine:
                 with self.lock:
                     if self.primary is not None:
                         scoring.record(self.primary, {"ok": True, "ms": ms}, time.time())
+                if tick % WATCH_SPEED_TICKS == 0:
+                    try:
+                        self._watch_speed()
+                    except Exception as e:  # noqa: BLE001 - the watchdog must not die
+                        log.error(TAG, f"speed watch crashed: {type(e).__name__}: {e}")
                 continue
             if not self.online():
                 continue                                   # our internet, not the config

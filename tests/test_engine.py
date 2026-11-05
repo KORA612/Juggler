@@ -268,3 +268,44 @@ def test_speed_job_re_measures_slow_configs_too(eng, monkeypatch):
     eng._job_speed()
     assert set(seen) == {good.id, slow.id}
     assert slow.speed_kbps > 100
+
+
+def test_the_config_in_use_is_switched_after_two_slow_readings(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    scoring.record(cur, {"kbps": 4000}, time.time())
+    scoring.record(other, {"kbps": 2000}, time.time())
+    eng.primary = cur
+    sizes = []
+
+    def slow(port, url, limit, seconds):
+        sizes.append(limit)
+        return {"kbps": 90}
+    monkeypatch.setattr(engine.tester, "_speed_once", slow)
+    eng._watch_speed()
+    assert eng.primary is cur                        # one slow reading: could be a blip
+    eng._watch_speed()
+    assert eng.primary is other and cur.speed_kbps == 90
+    assert sizes[0] >= 500 * 125 * engine.WATCH_SPEED_S   # can't finish in time below the minimum
+
+
+def test_a_fast_reading_breaks_the_slow_streak(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    scoring.record(cur, {"kbps": 4000}, time.time())
+    eng.primary = cur
+    readings = iter([{"kbps": 90}, {"kbps_min": 3000}, {"kbps": 90}])
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda *a: next(readings))
+    for _ in range(3):
+        eng._watch_speed()
+    assert eng.primary is cur
+
+
+def test_a_pinned_slow_config_stays(eng, monkeypatch):
+    monkeypatch.setattr(scoring, "min_kbps", 500)
+    cur, other = proven(eng, 1), proven(eng, 2)
+    eng.state["pinned"], eng.primary = cur.id, cur
+    monkeypatch.setattr(engine.tester, "_speed_once", lambda *a: {"kbps": 90})
+    eng._watch_speed()
+    eng._watch_speed()
+    assert eng.primary is cur
